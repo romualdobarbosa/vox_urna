@@ -5,6 +5,12 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.ruff_cache/
 
 # Virtual environments
 .venv
+
+# Camadas reconstruíveis pelo pipeline; o gold é versionado (lido pelo dashboard)
+data/bronze/
+data/silver/
