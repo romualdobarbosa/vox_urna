@@ -1,12 +1,15 @@
-.PHONY: all bronze silver test lint
+.PHONY: all bronze silver gold test lint
 
-all: silver
+all: gold
 
 bronze:
 	uv run vox-urna bronze
 
 silver: bronze
 	uv run vox-urna silver
+
+gold: silver
+	uv run vox-urna gold
 
 test:
 	uv run pytest

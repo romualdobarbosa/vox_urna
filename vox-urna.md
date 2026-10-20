@@ -68,11 +68,14 @@ Execução por CLI, um comando por camada (`vox-urna bronze --ano 2026 --turno 1
 - **Conferência com o resultado oficial:** os totais nacionais batem voto a voto (ex: 2022 2T, Lula 60.345.999 × Jair 58.206.354). Nos dados reais só caíram em quarentena urnas anuladas: 4 + 1 seções em 2018, 4 + 1 em 2022 e nenhuma em 2026.
 
 ### Gold
+Arquivos em `data/gold/{tabela}.parquet`, reconstruídos inteiros a cada `vox-urna gold` (cerca de 2 min). As tabelas por seção (`categorias_secao`, `painel_secao_*`, cerca de 100 MB) ficam fora do git; as demais são versionadas para o dashboard.
+- `lados`: a config de lados ([ADR 0003](docs/adr/0003-lados-nomeados-pelo-finalista-de-2026.md)), conferida contra o nome e o partido do BU. O build falha se divergir, ou se um 2º turno tiver voto fora dos lados.
 - `categorias_secao`: cada seção nas categorias do modelo (lados, outros, branco, nulo, abstenção), em fração dos aptos.
-- `painel_secao_{2018,2022}`: o 1º turno juntado ao 2º por `(uf, municipio, zona, secao)`, com a taxa de match.
-- `transferencia_zona_{2018,2022}`: o β por zona.
-- `ligacao_2026`: o β de cada seção de 2026 pela ligação em três passos, com o quanto do eleitorado caiu em cada passo.
-- `projecao_2026`: a projeção por cenário, agregada por zona, município, UF, exterior (país e cidade) e Brasil.
+- `painel_secao_{2018,2022}`: o 1º turno juntado ao 2º por `(uf, municipio, zona, secao)`.
+- `transferencia_zona_{2018,2022}`: o β por zona (`nivel = 'zona'`, com `fonte` dizendo se é o próprio ou o da UF) e por UF (`nivel = 'uf'`).
+- `ligacao_2026`: o β de cada (UF, município, zona) de 2026 por eleição de referência (`ano_ref`) e o passo da ligação.
+- `projecao_2026`: a projeção por cenário (`base` e `outros_2018`), agregada por zona, município (no exterior, a cidade), UF (`ZZ` é o exterior) e Brasil.
+- `taxa_match`: a taxa de match ponderada pelos aptos de cada painel e de cada passo da ligação.
 - `backtest_2022` (opcional): o β de 2018 aplicado ao 1º turno de 2022, comparado com o 2º turno real de 2022.
 - Depois de 25/10: `confronto_2026` (projeção contra resultado real) e `transferencia_zona_2026` (o β real de 2026, comparado com o de 2022).
 
@@ -90,7 +93,7 @@ j ∈ {lula, flavio, branco, nulo, abstenção}           (2º turno)
 s.a.  0 ≤ β_kj ≤ 1,   Σ_j β_kj = 1
 ```
 
-- Solver: `cvxpy` ou `scipy.optimize.lsq_linear`.
+- Mínimos quadrados ponderados pelos aptos de cada seção. Solver: `scipy.optimize.minimize` (SLSQP), cerca de 10 ms por zona.
 - **Lados** ([ADR 0003](docs/adr/0003-lados-nomeados-pelo-finalista-de-2026.md)): cada categoria de finalista leva o nome do finalista de 2026. Uma config explícita diz quem ocupa cada lado em cada eleição:
 
   | Lado | 2018 | 2022 | 2026 |

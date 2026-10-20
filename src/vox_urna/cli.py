@@ -5,6 +5,8 @@ from pathlib import Path
 
 from vox_urna.bronze.ingest import ingerir
 from vox_urna.bronze.manifest import Status
+from vox_urna.gold.construcao import GoldInconsistente
+from vox_urna.gold.construcao import construir as construir_gold
 from vox_urna.silver.construcao import RejeicaoExcessiva, construir
 
 ANOS = (2018, 2022, 2026)
@@ -30,12 +32,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     silver.add_argument("--workers", type=int, default=8)
 
+    gold = sub.add_parser("gold", help="estima a transferência de votos e projeta 2026")
+    gold.add_argument(
+        "--min-secoes",
+        type=int,
+        default=10,
+        help="seções mínimas para a zona ter β próprio; abaixo disso usa o da UF",
+    )
+
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     if args.camada == "bronze":
         return _bronze(args)
-    return _silver(args)
+    if args.camada == "silver":
+        return _silver(args)
+    return _gold(args)
 
 
 def _bronze(args: argparse.Namespace) -> int:
@@ -60,6 +72,17 @@ def _silver(args: argparse.Namespace) -> int:
     for r in resultados:
         estado = "pulado" if r.pulado else "construído"
         print(f"{r.ano}/{r.turno}: {estado}, {r.secoes} seções, {r.rejeitadas} em quarentena")
+    return 0
+
+
+def _gold(args: argparse.Namespace) -> int:
+    try:
+        tabelas = construir_gold(args.dados, min_secoes=args.min_secoes)
+    except GoldInconsistente as erro:
+        print(f"gold abortado: {erro}", file=sys.stderr)
+        return 1
+    for t in tabelas:
+        print(f"{t.nome}: {t.linhas} linhas")
     return 0
 
 

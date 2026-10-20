@@ -14,3 +14,7 @@ wheels/
 # Camadas reconstruíveis pelo pipeline; o gold é versionado (lido pelo dashboard)
 data/bronze/
 data/silver/
+# Tabelas do gold por seção: grandes demais para o git e o dashboard não as lê
+data/gold/categorias_secao.parquet
+data/gold/painel_secao_*.parquet
+data/gold/_tmp/
