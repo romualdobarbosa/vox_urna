@@ -94,3 +94,35 @@ def test_so_boa_esperanca_do_norte_fica_sem_poligono_na_malha_municipal():
     sem_poligono = municipios.filter(~pl.col("cd_ibge").is_in(malha))
     assert sem_poligono["cd_ibge"].to_list() == [mapa.SEM_POLIGONO]
     assert set(municipios["cd_ibge"]) >= malha
+
+
+def test_exterior_lista_as_cidades_pelo_eleitorado():
+    gold = dados.carregar()
+    exterior = dados.tabela_exterior(gold.projecao, "base")
+    assert exterior.height > 100
+    assert exterior["aptos"].is_sorted(descending=True)
+    assert "Abu Dhabi" in exterior["nome"].to_list()
+
+
+def test_zonas_ordenadas_da_mais_favoravel_a_lula_e_exterior_como_uma_zona():
+    gold = dados.carregar()
+    zonas = dados.tabela_zona(gold.projecao, "base")
+    assert zonas["margem_lula"].is_sorted(descending=True)
+    assert zonas.filter(pl.col("uf") == dados.UF_EXTERIOR)["nome"].to_list() == ["Exterior"]
+    assert dados.tabela_zona(gold.projecao, "base", "AC")["nome"][0].endswith("(AC)")
+
+
+def test_matriz_de_transferencia_usa_os_nomes_da_eleicao_e_cada_linha_soma_1():
+    gold = dados.carregar()
+    m2018 = dados.matriz_transferencia(gold.transferencia_uf, gold.lados, 2018, "SP")
+    assert m2018["origem"].to_list() == [
+        "Fernando Haddad (PT)",
+        "Jair Bolsonaro (PSL)",
+        "Outros candidatos",
+        "Branco",
+        "Nulo",
+        "Abstenção",
+    ]
+    assert m2018.columns[1:3] == ["Fernando Haddad (PT)", "Jair Bolsonaro (PSL)"]
+    somas = m2018.select(pl.sum_horizontal(pl.exclude("origem")))
+    assert somas.to_series().to_list() == pytest.approx([1.0] * 6)

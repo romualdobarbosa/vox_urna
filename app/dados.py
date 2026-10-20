@@ -75,14 +75,22 @@ class Gold:
     lados: pl.DataFrame
     taxa_match: pl.DataFrame
     municipio_ibge: pl.DataFrame
+    transferencia_uf: pl.DataFrame  # o β no nível UF, de todas as eleições de referência
 
 
 def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
+    transferencia = pl.concat(
+        pl.read_parquet(caminho)
+        .filter(pl.col("nivel") == "uf")
+        .with_columns(ano=pl.lit(int(caminho.stem.rsplit("_", 1)[1])))
+        for caminho in sorted(dir_gold.glob("transferencia_zona_*.parquet"))
+    )
     return Gold(
         projecao=pl.read_parquet(dir_gold / "projecao_2026.parquet"),
         lados=pl.read_parquet(dir_gold / "lados.parquet"),
         taxa_match=pl.read_parquet(dir_gold / "taxa_match.parquet"),
         municipio_ibge=pl.read_parquet(dir_gold / "municipio_ibge.parquet"),
+        transferencia_uf=transferencia,
     )
 
 
@@ -180,6 +188,71 @@ def nome_municipio(nm: str) -> str:
         elif p.startswith("D'"):
             palavras[i] = "d" + p[1:]
     return " ".join(palavras)
+
+
+def tabela_exterior(projecao: pl.DataFrame, cenario: str) -> pl.DataFrame:
+    """Uma linha por cidade do exterior (a do consulado), da maior para a menor em aptos."""
+    return (
+        projecao.filter(
+            (pl.col("nivel") == "municipio")
+            & (pl.col("cenario") == cenario)
+            & (pl.col("uf") == UF_EXTERIOR)
+        )
+        .select(
+            pl.col("nm_municipio")
+            .map_elements(nome_municipio, return_dtype=pl.String)
+            .alias("nome"),
+            "aptos",
+            "pct_lula_validos",
+            "pct_flavio_validos",
+            (pl.col("pct_lula_validos") - pl.col("pct_flavio_validos")).alias("margem_lula"),
+        )
+        .sort("aptos", "nome", descending=[True, False])
+    )
+
+
+def tabela_zona(projecao: pl.DataFrame, cenario: str, uf: str | None = None) -> pl.DataFrame:
+    """Uma linha por zona (o exterior é uma zona só), da mais favorável a Lula à mais
+    favorável a Flávio."""
+    zonas = projecao.filter((pl.col("nivel") == "zona") & (pl.col("cenario") == cenario))
+    if uf is not None:
+        zonas = zonas.filter(pl.col("uf") == uf)
+    return zonas.select(
+        "uf",
+        pl.when(pl.col("uf") == UF_EXTERIOR)
+        .then(pl.lit("Exterior"))
+        .otherwise(pl.format("Zona {} ({})", "zona", "uf"))
+        .alias("nome"),
+        "aptos",
+        "pct_lula_validos",
+        "pct_flavio_validos",
+        (pl.col("pct_lula_validos") - pl.col("pct_flavio_validos")).alias("margem_lula"),
+    ).sort("margem_lula", "nome", descending=[True, False])
+
+
+CATEGORIAS = {"outros": "Outros candidatos", "branco": "Branco", "nulo": "Nulo"}
+CATEGORIAS_FIM = {"abstencao": "Abstenção"}
+
+
+def matriz_transferencia(
+    transferencia_uf: pl.DataFrame, lados: pl.DataFrame, ano: int, uf: str
+) -> pl.DataFrame:
+    """Para onde foi cada categoria do 1º turno numa UF, em fração, com os nomes reais.
+
+    Uma linha por categoria do 1º turno (`origem`) e uma coluna por categoria do 2º turno;
+    cada linha soma 1.
+    """
+    nomes = {**finalistas(lados, ano), **CATEGORIAS, **CATEGORIAS_FIM}
+    destinos = [*LADOS, "branco", "nulo", "abstencao"]
+    ordem = [*LADOS, *CATEGORIAS, *CATEGORIAS_FIM]
+    return (
+        transferencia_uf.filter((pl.col("ano") == ano) & (pl.col("uf") == uf))
+        .sort(pl.col("k").replace_strict({k: i for i, k in enumerate(ordem)}))
+        .select(
+            pl.col("k").replace_strict(nomes).alias("origem"),
+            *(pl.col(j).alias(nomes[j]) for j in destinos),
+        )
+    )
 
 
 def taxa_match_ligacao(taxa_match: pl.DataFrame, ano_ref: int) -> dict[str, float]:

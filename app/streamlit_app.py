@@ -22,6 +22,13 @@ def malha_municipio(uf: str | None) -> dict:
     return {**malha, "features": [f for f in malha["features"] if f["properties"]["uf"] == uf]}
 
 
+def em_pct(tabela: pl.DataFrame) -> pl.DataFrame:
+    """As frações das tabelas em pontos percentuais, como as colunas mostram."""
+    return tabela.with_columns(
+        pl.col("pct_lula_validos", "pct_flavio_validos", "margem_lula") * 100
+    )
+
+
 g = gold()
 nomes = dados.finalistas(g.lados)
 
@@ -32,10 +39,18 @@ def config_colunas(rotulo: str) -> dict:
         "nome": rotulo,
         "aptos": st.column_config.NumberColumn("Eleitores aptos", format="localized"),
         "pct_lula_validos": st.column_config.ProgressColumn(
-            f"{nomes['lula']} (% válidos)", format="%.1f%%", min_value=0, max_value=100
+            f"{nomes['lula']} (% válidos)",
+            format="%.1f%%",
+            min_value=0,
+            max_value=100,
+            color=COR["lula"],
         ),
         "pct_flavio_validos": st.column_config.ProgressColumn(
-            f"{nomes['flavio']} (% válidos)", format="%.1f%%", min_value=0, max_value=100
+            f"{nomes['flavio']} (% válidos)",
+            format="%.1f%%",
+            min_value=0,
+            max_value=100,
+            color=COR["flavio"],
         ),
         "margem_lula": st.column_config.NumberColumn(
             "Diferença (p.p., Lula − Flávio)", format="%+.1f"
@@ -128,9 +143,7 @@ if nivel == "Município":
             "município está na tabela abaixo."
         )
     st.dataframe(
-        tabela_mapa.drop("uf", "cd_ibge").with_columns(
-            pl.col("pct_lula_validos", "pct_flavio_validos", "margem_lula") * 100
-        ),
+        em_pct(tabela_mapa.drop("uf", "cd_ibge")),
         hide_index=True,
         width="stretch",
         height=360,
@@ -138,10 +151,67 @@ if nivel == "Município":
     )
 
 st.subheader("Por UF")
-uf = dados.tabela_uf(g.projecao, cenario).with_columns(
-    pl.col("pct_lula_validos", "pct_flavio_validos", "margem_lula") * 100
-)
+uf = em_pct(dados.tabela_uf(g.projecao, cenario))
 st.dataframe(uf.drop("uf"), hide_index=True, width="stretch", column_config=config_colunas("UF"))
+
+
+st.subheader("Exterior, por cidade")
+st.caption("Cada cidade com consulado brasileiro, da maior para a menor em eleitores aptos.")
+st.dataframe(
+    em_pct(dados.tabela_exterior(g.projecao, cenario)),
+    hide_index=True,
+    width="stretch",
+    height=360,
+    column_config=config_colunas("Cidade"),
+)
+
+st.subheader("Zonas eleitorais")
+st.caption(
+    "Da zona mais favorável a Lula à mais favorável a Flávio. A zona é a unidade em que a "
+    "transferência de votos é estimada; ela não tem polígono no mapa."
+)
+uf_zona = st.selectbox(
+    "UF das zonas",
+    [None, *sorted(set(g.projecao["uf"].drop_nulls()))],
+    format_func=lambda uf: "Todas" if uf is None else dados.NOMES_UF[uf],
+)
+st.dataframe(
+    em_pct(dados.tabela_zona(g.projecao, cenario, uf_zona)).drop("uf"),
+    hide_index=True,
+    width="stretch",
+    height=360,
+    column_config=config_colunas("Zona"),
+)
+
+st.subheader("Para onde foram os votos")
+st.caption(
+    "A transferência estimada numa eleição de referência: de cada 100 eleitores de uma "
+    "categoria no 1º turno (linha), quantos foram para cada categoria no 2º turno (coluna). "
+    "É a estimativa da UF inteira; a projeção usa a de cada zona."
+)
+anos = sorted(set(g.transferencia_uf["ano"]), reverse=True)
+coluna_ano, coluna_uf = st.columns(2)
+ano_ref = coluna_ano.selectbox("Eleição de referência", anos)
+uf_ref = coluna_uf.selectbox(
+    "UF",
+    sorted(set(g.transferencia_uf["uf"])),
+    format_func=lambda uf: dados.NOMES_UF[uf],
+    index=sorted(set(g.transferencia_uf["uf"])).index("SP"),
+)
+matriz = dados.matriz_transferencia(g.transferencia_uf, g.lados, ano_ref, uf_ref)
+st.dataframe(
+    matriz.with_columns(pl.exclude("origem") * 100),
+    hide_index=True,
+    width="stretch",
+    column_config={
+        "origem": f"1º turno de {ano_ref} ↓ · 2º turno →",
+        **{
+            c: st.column_config.NumberColumn(c, format="%.1f%%")
+            for c in matriz.columns
+            if c != "origem"
+        },
+    },
+)
 
 st.divider()
 with st.expander("Método e limitações"):

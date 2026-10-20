@@ -1,4 +1,4 @@
-.PHONY: all bronze silver gold test lint
+.PHONY: all bronze silver gold test lint dashboard
 
 all: gold
 
@@ -17,3 +17,6 @@ test:
 lint:
 	uv run ruff check .
 	uv run ruff format --check .
+
+dashboard:
+	uv run --group dashboard streamlit run app/streamlit_app.py
