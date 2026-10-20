@@ -42,4 +42,4 @@ testpaths = ["tests"]
 pythonpath = ["app"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["vox_urna", "dados"]
+known-first-party = ["vox_urna", "dados", "mapa"]

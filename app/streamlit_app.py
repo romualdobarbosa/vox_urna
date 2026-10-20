@@ -2,8 +2,8 @@ import polars as pl
 import streamlit as st
 
 import dados
-
-COR = {"lula": "#C8102E", "flavio": "#1F4E9C"}
+import mapa
+from mapa import COR
 
 st.set_page_config(page_title="Vox Urna: projeção do 2º turno de 2026", layout="wide")
 
@@ -64,11 +64,27 @@ for coluna, lado in zip(colunas[:2], dados.LADOS, strict=True):
     coluna.metric(
         nomes[lado],
         dados.pct(brasil[f"pct_{lado}_validos"]),
-        f"{dados.inteiro(brasil[lado])} votos",
-        delta_color="off",
+        help=f"{dados.inteiro(brasil[lado])} votos projetados",
     )
 colunas[2].metric("Brancos e nulos", dados.inteiro(brasil["branco"] + brasil["nulo"]))
 colunas[3].metric("Abstenção", dados.pct(brasil["abstencao"] / brasil["aptos"]))
+
+st.subheader("Mapa")
+st.caption(
+    f"Diferença em pontos percentuais dos votos válidos: vermelho onde {nomes['lula']} fica "
+    f"à frente, azul onde {nomes['flavio']} fica. O exterior não aparece no mapa."
+)
+st.plotly_chart(
+    mapa.figura(
+        dados.tabela_uf(g.projecao, cenario).filter(pl.col("uf") != dados.UF_EXTERIOR),
+        mapa.malha("uf"),
+        chave="uf",
+        rotulo="nome",
+        nomes=nomes,
+    ),
+    width="stretch",
+    config={"scrollZoom": False},
+)
 
 st.subheader("Por UF")
 uf = dados.tabela_uf(g.projecao, cenario).with_columns(

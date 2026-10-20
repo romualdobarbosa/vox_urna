@@ -68,3 +68,11 @@ def test_formatacao_brasileira():
     assert dados.pct(0.47518) == "47,5%"
     assert dados.pct(0.995248, 2) == "99,52%"
     assert dados.inteiro(57119831.46) == "57.119.831"
+
+
+def test_malha_uf_cobre_todas_as_ufs_da_projecao_menos_o_exterior():
+    import mapa
+
+    gold = dados.carregar()
+    ufs = set(dados.tabela_uf(gold.projecao, "base")["uf"]) - {dados.UF_EXTERIOR}
+    assert ufs == {f["properties"]["uf"] for f in mapa.malha("uf")["features"]}
