@@ -19,6 +19,11 @@ requires = ["uv_build>=0.11,<0.12"]
 build-backend = "uv_build"
 
 [dependency-groups]
+dashboard = [
+    "plotly>=7.1.0",
+    "polars>=2.0.0",
+    "streamlit>=1.66.0",
+]
 dev = [
     "pre-commit>=4.7.0",
     "pytest>=9.1.1",
@@ -34,3 +39,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["app"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["vox_urna", "dados"]

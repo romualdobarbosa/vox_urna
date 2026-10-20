@@ -1,0 +1,4 @@
+# Dependências do dashboard no Streamlit Community Cloud (o pipeline não roda lá).
+streamlit==1.66.0
+polars==2.0.0
+plotly==7.1.0
