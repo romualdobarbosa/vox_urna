@@ -13,8 +13,35 @@ def gold() -> dados.Gold:
     return dados.carregar()
 
 
+@st.cache_data
+def malha_municipio(uf: str | None) -> dict:
+    """A malha municipal inteira ou só a de uma UF, para não mandar o Brasil todo à toa."""
+    malha = mapa.malha("municipio")
+    if uf is None:
+        return malha
+    return {**malha, "features": [f for f in malha["features"] if f["properties"]["uf"] == uf]}
+
+
 g = gold()
 nomes = dados.finalistas(g.lados)
+
+
+def config_colunas(rotulo: str) -> dict:
+    """A configuração das colunas das tabelas de UF e de município."""
+    return {
+        "nome": rotulo,
+        "aptos": st.column_config.NumberColumn("Eleitores aptos", format="localized"),
+        "pct_lula_validos": st.column_config.ProgressColumn(
+            f"{nomes['lula']} (% válidos)", format="%.1f%%", min_value=0, max_value=100
+        ),
+        "pct_flavio_validos": st.column_config.ProgressColumn(
+            f"{nomes['flavio']} (% válidos)", format="%.1f%%", min_value=0, max_value=100
+        ),
+        "margem_lula": st.column_config.NumberColumn(
+            "Diferença (p.p., Lula − Flávio)", format="%+.1f"
+        ),
+    }
+
 
 st.warning(dados.AVISO, icon="⚠️")
 st.title("Projeção do 2º turno presidencial de 2026")
@@ -74,40 +101,47 @@ st.caption(
     f"Diferença em pontos percentuais dos votos válidos: vermelho onde {nomes['lula']} fica "
     f"à frente, azul onde {nomes['flavio']} fica. O exterior não aparece no mapa."
 )
+nivel = st.radio("Nível do mapa", ["UF", "Município"], horizontal=True)
+if nivel == "UF":
+    tabela_mapa = dados.tabela_uf(g.projecao, cenario).filter(pl.col("uf") != dados.UF_EXTERIOR)
+    geojson, chave = mapa.malha("uf"), "uf"
+else:
+    ufs = sorted(set(g.projecao["uf"].drop_nulls()) - {dados.UF_EXTERIOR})
+    recorte = st.selectbox(
+        "Recorte",
+        [None, *ufs],
+        format_func=lambda uf: "Brasil inteiro" if uf is None else dados.NOMES_UF[uf],
+    )
+    tabela_mapa = dados.tabela_municipio(g.projecao, g.municipio_ibge, cenario, recorte)
+    geojson, chave = malha_municipio(recorte), "cd_ibge"
+
 st.plotly_chart(
-    mapa.figura(
-        dados.tabela_uf(g.projecao, cenario).filter(pl.col("uf") != dados.UF_EXTERIOR),
-        mapa.malha("uf"),
-        chave="uf",
-        rotulo="nome",
-        nomes=nomes,
-    ),
+    mapa.figura(tabela_mapa, geojson, chave=chave, rotulo="nome", nomes=nomes),
     width="stretch",
     config={"scrollZoom": False},
 )
+if nivel == "Município":
+    if recorte in (None, "MT"):
+        st.caption(
+            "Boa Esperança do Norte (MT), instalado em 2025, ainda não tem polígono na malha do "
+            "IBGE: o território dele aparece dentro de Sorriso e de Nova Ubiratã. A projeção do "
+            "município está na tabela abaixo."
+        )
+    st.dataframe(
+        tabela_mapa.drop("uf", "cd_ibge").with_columns(
+            pl.col("pct_lula_validos", "pct_flavio_validos", "margem_lula") * 100
+        ),
+        hide_index=True,
+        width="stretch",
+        height=360,
+        column_config=config_colunas("Município"),
+    )
 
 st.subheader("Por UF")
 uf = dados.tabela_uf(g.projecao, cenario).with_columns(
     pl.col("pct_lula_validos", "pct_flavio_validos", "margem_lula") * 100
 )
-st.dataframe(
-    uf.drop("uf"),
-    hide_index=True,
-    width="stretch",
-    column_config={
-        "nome": "UF",
-        "aptos": st.column_config.NumberColumn("Eleitores aptos", format="localized"),
-        "pct_lula_validos": st.column_config.ProgressColumn(
-            f"{nomes['lula']} (% válidos)", format="%.1f%%", min_value=0, max_value=100
-        ),
-        "pct_flavio_validos": st.column_config.ProgressColumn(
-            f"{nomes['flavio']} (% válidos)", format="%.1f%%", min_value=0, max_value=100
-        ),
-        "margem_lula": st.column_config.NumberColumn(
-            "Diferença (p.p., Lula − Flávio)", format="%+.1f"
-        ),
-    },
-)
+st.dataframe(uf.drop("uf"), hide_index=True, width="stretch", column_config=config_colunas("UF"))
 
 st.divider()
 with st.expander("Método e limitações"):

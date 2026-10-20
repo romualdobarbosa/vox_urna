@@ -76,3 +76,21 @@ def test_malha_uf_cobre_todas_as_ufs_da_projecao_menos_o_exterior():
     gold = dados.carregar()
     ufs = set(dados.tabela_uf(gold.projecao, "base")["uf"]) - {dados.UF_EXTERIOR}
     assert ufs == {f["properties"]["uf"] for f in mapa.malha("uf")["features"]}
+
+
+def test_nome_municipio_em_grafia_usual():
+    assert dados.nome_municipio("BOA ESPERANÇA DO NORTE") == "Boa Esperança do Norte"
+    assert dados.nome_municipio("OLHO D'ÁGUA DO BORGES") == "Olho d'Água do Borges"
+    assert dados.nome_municipio("PINGO-D'ÁGUA") == "Pingo-D'Água"
+
+
+def test_so_boa_esperanca_do_norte_fica_sem_poligono_na_malha_municipal():
+    import mapa
+
+    gold = dados.carregar()
+    municipios = dados.tabela_municipio(gold.projecao, gold.municipio_ibge, "base")
+    assert municipios["cd_ibge"].null_count() == 0
+    malha = {f["properties"]["cd_ibge"] for f in mapa.malha("municipio")["features"]}
+    sem_poligono = municipios.filter(~pl.col("cd_ibge").is_in(malha))
+    assert sem_poligono["cd_ibge"].to_list() == [mapa.SEM_POLIGONO]
+    assert set(municipios["cd_ibge"]) >= malha

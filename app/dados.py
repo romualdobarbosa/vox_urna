@@ -74,6 +74,7 @@ class Gold:
     projecao: pl.DataFrame
     lados: pl.DataFrame
     taxa_match: pl.DataFrame
+    municipio_ibge: pl.DataFrame
 
 
 def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
@@ -81,6 +82,7 @@ def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
         projecao=pl.read_parquet(dir_gold / "projecao_2026.parquet"),
         lados=pl.read_parquet(dir_gold / "lados.parquet"),
         taxa_match=pl.read_parquet(dir_gold / "taxa_match.parquet"),
+        municipio_ibge=pl.read_parquet(dir_gold / "municipio_ibge.parquet"),
     )
 
 
@@ -123,6 +125,61 @@ def tabela_uf(projecao: pl.DataFrame, cenario: str) -> pl.DataFrame:
         )
         .sort(pl.col("uf") == UF_EXTERIOR, "uf")
     )
+
+
+def tabela_municipio(
+    projecao: pl.DataFrame, municipio_ibge: pl.DataFrame, cenario: str, uf: str | None = None
+) -> pl.DataFrame:
+    """Uma linha por município do Brasil (de uma UF, se dada), com o código IBGE da malha.
+
+    O exterior fica de fora: ele não tem município IBGE e não vai para o mapa.
+    """
+    municipios = projecao.filter(
+        (pl.col("nivel") == "municipio")
+        & (pl.col("cenario") == cenario)
+        & (pl.col("uf") != UF_EXTERIOR)
+    )
+    if uf is not None:
+        municipios = municipios.filter(pl.col("uf") == uf)
+    return (
+        municipios.join(
+            municipio_ibge.select("uf", "cd_municipio_tse", "cd_municipio_ibge"),
+            left_on=["uf", "cd_municipio"],
+            right_on=["uf", "cd_municipio_tse"],
+            how="left",
+            validate="1:1",
+        )
+        .select(
+            "uf",
+            pl.col("cd_municipio_ibge").cast(pl.String).alias("cd_ibge"),
+            (
+                pl.col("nm_municipio").map_elements(nome_municipio, return_dtype=pl.String)
+                + " ("
+                + pl.col("uf")
+                + ")"
+            ).alias("nome"),
+            "aptos",
+            "pct_lula_validos",
+            "pct_flavio_validos",
+            (pl.col("pct_lula_validos") - pl.col("pct_flavio_validos")).alias("margem_lula"),
+        )
+        .sort("uf", "nome")
+    )
+
+
+MINUSCULAS = {"de", "da", "do", "das", "dos", "e"}
+
+
+def nome_municipio(nm: str) -> str:
+    """O nome do BU, em maiúsculas, na grafia usual: "OLHO D'ÁGUA DO BORGES" → "Olho d'Água
+    do Borges"."""
+    palavras = nm.title().split()
+    for i, p in enumerate(palavras[1:], start=1):
+        if p.lower() in MINUSCULAS:
+            palavras[i] = p.lower()
+        elif p.startswith("D'"):
+            palavras[i] = "d" + p[1:]
+    return " ".join(palavras)
 
 
 def taxa_match_ligacao(taxa_match: pl.DataFrame, ano_ref: int) -> dict[str, float]:

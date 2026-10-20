@@ -10,6 +10,9 @@ import polars as pl
 DIR_GEO = Path(__file__).resolve().parent / "geo"
 COR = {"lula": "#C8102E", "flavio": "#1F4E9C"}
 NEUTRO = "#F2F2F2"
+# Boa Esperança do Norte (MT), instalado em 2025, ainda não está na malha v3 do IBGE: o
+# território dele aparece dentro de Sorriso e de Nova Ubiratã.
+SEM_POLIGONO = "5101837"
 
 
 @cache
