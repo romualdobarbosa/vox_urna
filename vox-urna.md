@@ -76,6 +76,7 @@ Arquivos em `data/gold/{tabela}.parquet`, reconstruídos inteiros a cada `vox-ur
 - `ligacao_2026`: o β de cada (UF, município, zona) de 2026 por eleição de referência (`ano_ref`) e o passo da ligação.
 - `projecao_2026`: a projeção por cenário (`base` e `outros_2018`), agregada por zona, município (no exterior, a cidade), UF (`ZZ` é o exterior) e Brasil.
 - `taxa_match`: a taxa de match ponderada pelos aptos de cada painel e de cada passo da ligação.
+- `municipio_ibge`: o código IBGE (7 dígitos) de cada município brasileiro de 2026, para o mapa. A fonte está anotada em `gold/construcao.py`, e o build falha se algum município ficar sem par ou com o código fora da UF.
 - `backtest_2022` (opcional): o β de 2018 aplicado ao 1º turno de 2022, comparado com o 2º turno real de 2022.
 - Depois de 25/10: `confronto_2026` (projeção contra resultado real) e `transferencia_zona_2026` (o β real de 2026, comparado com o de 2022).
 

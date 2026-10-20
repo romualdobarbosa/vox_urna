@@ -16,10 +16,10 @@ CANDIDATOS = {
     2026: {13: ("LULA", "PT"), 22: ("FLAVIO BOLSONARO", "PL"), 70: ("AUGUSTO CURY", "AVANTE")},
 }
 # (UF, município, zona, seções). Na referência, a zona 1 tem β próprio e a zona 2, com
-# poucas seções, usa o da UF. Em 2026 o município 200 passa para a zona 3 (passo
-# "municipio") e surge o município 300 (passo "uf").
-SECOES_REF = [("AC", 100, 1, 30), ("AC", 100, 2, 3), ("AC", 200, 2, 4)]
-SECOES_2026 = [("AC", 100, 1, 20), ("AC", 200, 3, 5), ("AC", 300, 1, 2)]
+# poucas seções, usa o da UF. Em 2026 o município 1570 passa para a zona 3 (passo
+# "municipio") e surge o município 1007 (passo "uf").
+SECOES_REF = [("AC", 1120, 1, 30), ("AC", 1120, 2, 3), ("AC", 1570, 2, 4)]
+SECOES_2026 = [("AC", 1120, 1, 20), ("AC", 1570, 3, 5), ("AC", 1007, 1, 2)]
 COLUNAS_SECAO = (
     "uf",
     "cd_municipio",
@@ -152,7 +152,7 @@ def test_ligacao_usa_os_tres_passos_e_reporta_a_taxa_de_match(gold):
         (linha["cd_municipio"], linha["zona"]): linha["passo"]
         for linha in ler(gold, "ligacao_2026")
     }
-    assert passos == {(100, 1): "municipio_zona", (200, 3): "municipio", (300, 1): "uf"}
+    assert passos == {(1120, 1): "municipio_zona", (1570, 3): "municipio", (1007, 1): "uf"}
 
     taxas = ler(gold, "taxa_match", "ligacao = 'ligacao_2026_ref_2022'")
     assert {t["passo"]: t["secoes"] for t in taxas} == {
@@ -162,9 +162,9 @@ def test_ligacao_usa_os_tres_passos_e_reporta_a_taxa_de_match(gold):
     }
     assert sum(t["fracao_aptos"] for t in taxas) == pytest.approx(1)
 
-    # O município 200 só estava na zona 2 em 2022, então herda o β dela.
+    # O município 1570 só estava na zona 2 em 2022, então herda o β dela.
     zona_2 = ler(gold, "transferencia_zona_2022", "nivel = 'zona' and zona = 2")
-    np.testing.assert_allclose(beta(ler(gold, "ligacao_2026", "cd_municipio = 200")), beta(zona_2))
+    np.testing.assert_allclose(beta(ler(gold, "ligacao_2026", "cd_municipio = 1570")), beta(zona_2))
 
 
 def test_projecao_conserva_os_aptos_e_aplica_o_beta_ligado(gold):
@@ -173,10 +173,10 @@ def test_projecao_conserva_os_aptos_e_aplica_o_beta_ligado(gold):
     assert brasil["pct_lula_validos"] + brasil["pct_flavio_validos"] == pytest.approx(1)
 
     [cidade] = ler(
-        gold, "projecao_2026", "cenario = 'base' and nivel = 'municipio' and cd_municipio = 300"
+        gold, "projecao_2026", "cenario = 'base' and nivel = 'municipio' and cd_municipio = 1007"
     )
-    esperado = votos_1t_2026(gold, "cd_municipio = 300") @ beta(
-        ler(gold, "ligacao_2026", "cd_municipio = 300")
+    esperado = votos_1t_2026(gold, "cd_municipio = 1007") @ beta(
+        ler(gold, "ligacao_2026", "cd_municipio = 1007")
     )
     np.testing.assert_allclose([cidade[j] for j in J], esperado)
 
@@ -184,12 +184,12 @@ def test_projecao_conserva_os_aptos_e_aplica_o_beta_ligado(gold):
 def test_sem_2018_a_sensibilidade_divide_outros_entre_os_lados(gold):
     cenarios = {
         p["cenario"]: p
-        for p in ler(gold, "projecao_2026", "nivel = 'municipio' and cd_municipio = 300")
+        for p in ler(gold, "projecao_2026", "nivel = 'municipio' and cd_municipio = 1007")
     }
     assert set(cenarios) == {"base", "outros_divididos"}
 
-    outros = votos_1t_2026(gold, "cd_municipio = 300")[K.index("outros")]
-    linha_base = beta(ler(gold, "ligacao_2026", "cd_municipio = 300"))[K.index("outros")]
+    outros = votos_1t_2026(gold, "cd_municipio = 1007")[K.index("outros")]
+    linha_base = beta(ler(gold, "ligacao_2026", "cd_municipio = 1007"))[K.index("outros")]
     diferenca = [cenarios["outros_divididos"][j] - cenarios["base"][j] for j in J]
     np.testing.assert_allclose(diferenca, outros * (np.array([0.5, 0.5, 0, 0, 0]) - linha_base))
 
@@ -200,14 +200,14 @@ def test_com_2018_a_sensibilidade_usa_a_linha_outros_de_2018(tmp_path):
 
     cenarios = {
         p["cenario"]: p
-        for p in ler(tmp_path, "projecao_2026", "nivel = 'municipio' and cd_municipio = 100")
+        for p in ler(tmp_path, "projecao_2026", "nivel = 'municipio' and cd_municipio = 1120")
     }
     assert set(cenarios) == {"base", "outros_2018"}
 
-    outros = votos_1t_2026(tmp_path, "cd_municipio = 100")[K.index("outros")]
+    outros = votos_1t_2026(tmp_path, "cd_municipio = 1120")[K.index("outros")]
     i = K.index("outros")
     linha = {
-        ano: beta(ler(tmp_path, "ligacao_2026", f"ano_ref = {ano} and cd_municipio = 100"))[i]
+        ano: beta(ler(tmp_path, "ligacao_2026", f"ano_ref = {ano} and cd_municipio = 1120"))[i]
         for ano in (2018, 2022)
     }
     diferenca = [cenarios["outros_2018"][j] - cenarios["base"][j] for j in J]
@@ -229,4 +229,18 @@ def test_voto_fora_dos_lados_no_2o_turno_aborta(tmp_path, monkeypatch):
     montar_silver(tmp_path)
 
     with pytest.raises(GoldInconsistente, match="fora dos lados"):
+        construir(tmp_path)
+
+
+def test_municipios_de_2026_ganham_o_codigo_ibge(gold):
+    assert {
+        (m["cd_municipio_tse"], m["cd_municipio_ibge"]) for m in ler(gold, "municipio_ibge")
+    } == {(1120, 1200013), (1570, 1200054), (1007, 1200138)}
+
+
+def test_municipio_sem_codigo_ibge_aborta(tmp_path, monkeypatch):
+    monkeypatch.setattr("test_gold.SECOES_2026", [*SECOES_2026, ("AC", 99999, 1, 1)])
+    montar_silver(tmp_path)
+
+    with pytest.raises(GoldInconsistente, match="sem código IBGE"):
         construir(tmp_path)

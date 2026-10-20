@@ -16,6 +16,21 @@ ANO_ALVO = 2026
 ANO_BASE = 2022
 ANO_SENSIBILIDADE = 2018
 
+# Correspondência entre os códigos de município do TSE e do IBGE, copiada de
+# https://github.com/betafcc/Municipios-Brasileiros-TSE (municipios_brasileiros_tse.csv,
+# commit fe2694220eb7280a3df01e985641f34078989aa8, de 2018). Cobre os 5570 municípios até 2024.
+CORRESPONDENCIA_IBGE = Path(__file__).parent / "municipios_tse_ibge.csv"
+# Municípios instalados depois da fonte acima: (uf, código TSE, código IBGE). O código IBGE
+# vem de https://servicodados.ibge.gov.br/api/v1/localidades/estados/MT/municipios.
+MUNICIPIOS_NOVOS = [("MT", 73709, 5101837)]  # Boa Esperança do Norte, instalado em 2025
+# Os dois primeiros dígitos do código IBGE são o código da UF.
+CODIGO_UF_IBGE = {
+    "RO": 11, "AC": 12, "AM": 13, "RR": 14, "PA": 15, "AP": 16, "TO": 17,
+    "MA": 21, "PI": 22, "CE": 23, "RN": 24, "PB": 25, "PE": 26, "AL": 27, "SE": 28, "BA": 29,
+    "MG": 31, "ES": 32, "RJ": 33, "SP": 35, "PR": 41, "SC": 42, "RS": 43,
+    "MS": 50, "MT": 51, "GO": 52, "DF": 53,
+}  # fmt: skip
+
 
 class GoldInconsistente(RuntimeError):
     pass
@@ -57,6 +72,7 @@ def construir(dir_dados: Path, *, min_secoes: int = MIN_SECOES_ZONA) -> list[Tab
         refs = [ano for ano in (ANO_BASE, ANO_SENSIBILIDADE) if ano in anos_painel]
         _ligacao(con, refs)
         _projecao(con, sensibilidade_2018=ANO_SENSIBILIDADE in refs)
+        _municipio_ibge(con)
 
         tabelas = _gravar(con, saida_tmp)
     finally:
@@ -184,7 +200,7 @@ def _transferencias(con: duckdb.DuckDBPyConnection, min_secoes: int) -> None:
     colunas = ["ano", "uf", "zona", "aptos_1t"]
     colunas += [f"{k}_1t" for k in K] + [f"{j}_2t" for j in J]
     dados = con.execute(
-        f"select {', '.join(colunas)} from painel order by ano, uf, zona"
+        f"select {', '.join(colunas)} from painel order by ano, uf, zona, cd_municipio, secao"
     ).fetchnumpy()
     x = np.column_stack([dados[f"{k}_1t"] for k in K]).astype(float)
     y = np.column_stack([dados[f"{j}_2t"] for j in J]).astype(float)
@@ -384,6 +400,57 @@ def _projecao(con: duckdb.DuckDBPyConnection, *, sensibilidade_2018: bool) -> No
     )
 
 
+def _municipio_ibge(con: duckdb.DuckDBPyConnection) -> None:
+    """Código IBGE de cada município brasileiro de 2026, para o mapa; o exterior fica fora."""
+    con.execute(
+        """
+        create table _correspondencia as
+        select uf, codigo_tse as cd_municipio_tse, codigo_ibge as cd_municipio_ibge
+        from read_csv($csv, header = true, columns = {
+            'codigo_tse': 'integer', 'uf': 'varchar', 'nome_municipio': 'varchar',
+            'capital': 'integer', 'codigo_ibge': 'integer'
+        })
+        """,
+        {"csv": str(CORRESPONDENCIA_IBGE)},
+    )
+    con.executemany("insert into _correspondencia values (?, ?, ?)", MUNICIPIOS_NOVOS)
+    con.execute(
+        f"""
+        create table municipio_ibge as
+        select m.uf, m.cd_municipio as cd_municipio_tse, c.cd_municipio_ibge, m.nm_municipio
+        from (
+            select uf, cd_municipio, any_value(nm_municipio) as nm_municipio
+            from categorias where ano = {ANO_ALVO} and turno = 1 and uf <> 'ZZ'
+            group by all
+        ) m
+        left join _correspondencia c on c.uf = m.uf and c.cd_municipio_tse = m.cd_municipio
+        """
+    )
+    sem_par = con.execute(
+        "select uf, cd_municipio_tse, nm_municipio from municipio_ibge "
+        "where cd_municipio_ibge is null order by all"
+    ).fetchall()
+    if sem_par:
+        raise GoldInconsistente(f"municípios de {ANO_ALVO} sem código IBGE: {sem_par}")
+    con.register(
+        "_uf_ibge",
+        {
+            "uf": np.array(list(CODIGO_UF_IBGE)),
+            "codigo": np.array(list(CODIGO_UF_IBGE.values())),
+        },
+    )
+    errados = con.execute(
+        """
+        select m.uf, m.cd_municipio_tse, m.cd_municipio_ibge
+        from municipio_ibge m left join _uf_ibge u using (uf)
+        where u.codigo is null or m.cd_municipio_ibge // 100000 <> u.codigo
+        order by all
+        """
+    ).fetchall()
+    if errados:
+        raise GoldInconsistente(f"código IBGE fora da UF do município: {errados}")
+
+
 def _gravar(con: duckdb.DuckDBPyConnection, saida: Path) -> list[Tabela]:
     fracoes = ", ".join(f"{k} / aptos as {k}" for k in K)
     consultas = {
@@ -395,6 +462,7 @@ def _gravar(con: duckdb.DuckDBPyConnection, saida: Path) -> list[Tabela]:
         "ligacao_2026": "select * from ligacao",
         "projecao_2026": "select * from projecao",
         "taxa_match": "select * from taxa_match",
+        "municipio_ibge": "select * from municipio_ibge",
     }
     for (ano,) in con.execute("select distinct ano from painel").fetchall():
         consultas[f"painel_secao_{ano}"] = f"select * exclude (ano) from painel where ano = {ano}"
