@@ -5,6 +5,7 @@ from pathlib import Path
 
 from vox_urna.bronze.ingest import ingerir
 from vox_urna.bronze.manifest import Status
+from vox_urna.silver.construcao import RejeicaoExcessiva, construir
 
 ANOS = (2018, 2022, 2026)
 
@@ -23,9 +24,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     bronze.add_argument("--workers", type=int, default=4)
 
+    silver = sub.add_parser("silver", help="filtra Presidente e gera as tabelas por seção")
+    silver.add_argument(
+        "--force", action="store_true", help="reconstrói mesmo o que não mudou no bronze"
+    )
+    silver.add_argument("--workers", type=int, default=8)
+
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+    if args.camada == "bronze":
+        return _bronze(args)
+    return _silver(args)
+
+
+def _bronze(args: argparse.Namespace) -> int:
     resumo = ingerir(
         args.dados / "bronze",
         args.ano,
@@ -36,6 +49,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(", ".join(f"{desfecho}: {n}" for desfecho, n in sorted(resumo.items())))
     return 1 if resumo[Status.CORRUPTED] or resumo[Status.FAILED] else 0
+
+
+def _silver(args: argparse.Namespace) -> int:
+    try:
+        resultados = construir(args.dados, force=args.force, workers=args.workers)
+    except RejeicaoExcessiva as erro:
+        print(f"silver abortado: {erro}", file=sys.stderr)
+        return 1
+    for r in resultados:
+        estado = "pulado" if r.pulado else "construído"
+        print(f"{r.ano}/{r.turno}: {estado}, {r.secoes} seções, {r.rejeitadas} em quarentena")
+    return 0
 
 
 if __name__ == "__main__":

@@ -58,10 +58,14 @@ Execução por CLI, um comando por camada (`vox-urna bronze --ano 2026 --turno 1
 - O arquivo bruto é guardado como veio.
 
 ### Silver
-- Normaliza o layout por ano (veja acima) e grava CSV → Parquet tipado, particionado por `ano/turno/uf`.
-- Filtra apenas Presidente.
-- Uma linha por seção, como o BU reporta (a seção principal já inclui as agregadas): chaves, `aptos, comparecimento, abstencao, branco, nulo` e os votos nominais por candidato (nome e partido reais).
-- **Invariantes:** soma dos votos = comparecimento; aptos = comparecimento + abstenção; nenhuma seção duplicada. Uma seção que viola uma invariante vai para quarentena, e o build só falha se as rejeitadas passarem de 0,1% ([ADR 0001](docs/adr/0001-quarentena-de-secoes-invalidas.md)).
+- Lê cada zip **em streaming** (o 1º turno tem cerca de 32 GB descomprimido por eleição, com todos os cargos), mantém só as linhas de Presidente (`CD_CARGO_PERGUNTA = 1`; os textos mudam de capitalização entre anos), normaliza o cabeçalho por ano e converte para UTF-8. O DuckDB monta as tabelas. Tudo roda em cerca de 2 min.
+- Grava Parquet tipado em `data/silver/{tabela}/ano=AAAA/turno=N/`:
+  - `secao`: uma linha por seção, como o BU reporta (a seção principal já inclui as agregadas), com `uf, cd_municipio, nm_municipio, zona, secao, aptos, comparecimento, abstencao, branco, nulo, nominais, secoes_agregadas`.
+  - `votos`: votos nominais por seção e candidato (`nr_votavel, nm_votavel, sg_partido, votos`), com nome e partido reais.
+  - `rejeitadas`: seções em quarentena e o motivo.
+- **Invariantes:** urna apurada (o TSE anula algumas urnas, cujos votos não entram na totalização); soma dos votos = comparecimento; aptos = comparecimento + abstenção; nenhuma seção duplicada; aptos e comparecimento constantes dentro da seção. Uma seção que viola uma invariante vai para quarentena, e o build só falha se as rejeitadas passarem de 0,1% ([ADR 0001](docs/adr/0001-quarentena-de-secoes-invalidas.md)).
+- **Idempotência:** `data/silver/_construcao.json` guarda os sha512 do bronze usados em cada turno. O turno só é reconstruído se o bronze mudar ou com `--force`.
+- **Conferência com o resultado oficial:** os totais nacionais batem voto a voto (ex: 2022 2T, Lula 60.345.999 × Jair 58.206.354). Nos dados reais só caíram em quarentena urnas anuladas: 4 + 1 seções em 2018, 4 + 1 em 2022 e nenhuma em 2026.
 
 ### Gold
 - `categorias_secao`: cada seção nas categorias do modelo (lados, outros, branco, nulo, abstenção), em fração dos aptos.
