@@ -63,3 +63,15 @@ _Avoid_: validação, acerto
 **Backtest**:
 A aplicação do método a uma eleição passada com resultado conhecido (a transferência de 2018 aplicada ao 1º turno de 2022), para medir o erro do método.
 _Avoid_: teste histórico
+
+**Erro do backtest**:
+A diferença, em pontos percentuais dos votos válidos do lado Lula, entre o que o backtest projetou e o resultado real do 2º turno de 2022. Vem de um único teste histórico e não é uma garantia estatística.
+_Avoid_: margem de erro, intervalo de confiança, erro amostral
+
+**Estabilidade da transferência**:
+O quanto a transferência de votos de cada categoria do 1º turno se repete de uma eleição para a outra (2018 e 2022).
+_Avoid_: robustez, consistência
+
+**Referência externa**:
+Uma estimativa da transferência de votos feita por outro método (uma pesquisa amostral publicada), usada só para comparar com o método deste projeto.
+_Avoid_: validação, gabarito, confronto

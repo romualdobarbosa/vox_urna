@@ -18,3 +18,6 @@ data/silver/
 data/gold/categorias_secao.parquet
 data/gold/painel_secao_*.parquet
 data/gold/_tmp/
+
+# Rascunho de trabalho escrito fora do repo; as decisões estão no vox-urna.md e em docs/adr/
+vox-urna-evolucao-metodologia.md

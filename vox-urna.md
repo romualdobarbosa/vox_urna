@@ -18,7 +18,7 @@ Vocabulário: [GLOSSARY.md](GLOSSARY.md). Decisões de arquitetura: [docs/adr/](
 - 2022: 1º e 2º turno, por seção. Fonte do β do cenário base.
 - 2026: 1º turno por seção. O 2º turno é ingerido depois de 25/10, para o confronto.
 - Exterior incluído no modelo e nos totais, como uma zona a mais.
-- Backtest 2018 → 2022 como item **opcional** (é o primeiro corte se atrasar).
+- Backtest 2018 → 2022, estabilidade da transferência entre 2018 e 2022 e referência externa (pesquisas de 2022), descritos em "Avaliação do método".
 - MVP publicado até 23/10/26.
 
 **Fora (por enquanto):**
@@ -77,7 +77,9 @@ Arquivos em `data/gold/{tabela}.parquet`, reconstruídos inteiros a cada `vox-ur
 - `projecao_2026`: a projeção por cenário (`base` e `outros_2018`), agregada por zona, município (no exterior, a cidade), UF (`ZZ` é o exterior) e Brasil.
 - `taxa_match`: a taxa de match ponderada pelos aptos de cada painel e de cada passo da ligação.
 - `municipio_ibge`: o código IBGE (7 dígitos) de cada município brasileiro de 2026, para o mapa. A fonte está anotada em `gold/construcao.py`, e o build falha se algum município ficar sem par ou com o código fora da UF.
-- `backtest_2022` (opcional): o β de 2018 aplicado ao 1º turno de 2022, comparado com o 2º turno real de 2022.
+- `backtest_2022`: o β de 2018 aplicado ao 1º turno de 2022 pela mesma ligação em 3 passos (`ligacao_2022`, com a taxa de match em `ligacao_2022_ref_2018`) e comparado com o 2º turno real de 2022, nos níveis Brasil, UF e município.
+- `estabilidade_transferencia`: a TVD por linha entre o β de 2018 e o de 2022, nos níveis Brasil e UF.
+- `referencia_externa`: as pesquisas de 2022 com cruzamento 1º × 2º turno, vindas de `gold/referencia_externa.csv`, ao lado do β Brasil de `outros` em 2022.
 - Depois de 25/10: `confronto_2026` (projeção contra resultado real) e `transferencia_zona_2026` (o β real de 2026, comparado com o de 2022).
 
 ## Modelo: transferência de votos (Goodman restrito)
@@ -104,7 +106,14 @@ s.a.  0 ≤ β_kj ≤ 1,   Σ_j β_kj = 1
 
 - **Estimação e ligação** ([ADR 0002](docs/adr/0002-fallback-hierarquico-do-beta.md)): o β é estimado por zona inteira (o da UF se a zona tiver menos de 10 seções). Cada seção de 2026 é ligada assim: (município, zona) de 2022 → zona(s) do município em 2022, ponderadas pelo eleitorado → UF.
 - **Cenários:** o **base** usa o β de 2022 inteiro. O de **sensibilidade** usa o β de 2022 com a linha "outros" trocada pela de 2018. Se 2018 for cortado, a sensibilidade vira uma divisão igual de "outros" entre os lados.
-- **Incerteza:** a faixa entre os cenários.
+- **Incerteza:** a faixa entre os cenários, com o erro do backtest logo abaixo ([ADR 0004](docs/adr/0004-erro-do-backtest-ao-lado-da-manchete.md)).
+- **Qualidade do ajuste:** o RMSE dos resíduos de cada zona, em pontos percentuais, vai numa coluna de `transferencia_zona_*`.
+
+## Avaliação do método
+
+- **Backtest:** replica só o cenário base. A métrica principal é o erro, com sinal, na % de votos válidos do lado Lula, nos níveis Brasil, UF e município. Também sai a % de UFs e de municípios em que o lado vencedor bateu, com e sem ponderação pelos aptos, e o erro por categoria (em fração dos aptos) como diagnóstico. A projeção de 2026 não é corrigida pelo viés. A refatoração da ligação não pode mudar `projecao_2026`, `ligacao_2026` nem as linhas de 2026 da `taxa_match`, e um teste garante isso.
+- **Estabilidade da transferência:** a TVD (`0,5 · Σ|p − q|`) de cada uma das 6 linhas do β, entre 2018 e 2022, nos níveis Brasil e UF. Não usa bootstrap. Uma nota avisa que a composição de `outros` mudou entre os anos.
+- **Referência externa:** só entram pesquisas com relatório original e registro no TSE, da 1ª rodada do 2º turno de 2022, mostradas lado a lado e sem média. A comparação usa a divisão entre os lados, Lula ÷ (Lula + Bolsonaro), dos eleitores de `outros`. Os números por candidato são ponderados pelos votos no 1º turno de 2022, contados nos nossos BUs. O comparador é o β Brasil de `outros` em 2022.
 - **Limitações (vão no README):** inferência ecológica (falácia ecológica); suposição de que o eleitorado de cada lado e de "outros" se comporta como na eleição de referência; taxa de match.
 
 ## Entregáveis
@@ -112,7 +121,7 @@ s.a.  0 ≤ β_kj ≤ 1,   Σ_j β_kj = 1
 - Repo `vox-urna` com pipeline reproduzível, testes e README com a metodologia e as limitações.
 - Dashboard Streamlit no **Streamlit Community Cloud**, lendo as tabelas gold versionadas no repo em Parquet. Bronze e silver ficam fora do git.
   - Mapa por UF e município (malhas do IBGE, com uma tabela de correspondência entre os códigos de município do TSE e do IBGE). As zonas aparecem só em tabelas e rankings.
-  - Exterior fora do mapa, nas listas por **país** (tabela cidade → país versionada) e por **cidade**.
+  - Exterior fora do mapa, numa lista por **cidade** do consulado.
   - Seletor de cenários, com as suposições escritas por extenso.
   - Nomes e partidos reais. Vermelho para o lado do PT, azul para o outro.
   - Taxa de match ponderada pelo eleitorado, sempre visível.
@@ -140,7 +149,7 @@ Python 3.12 (uv), DuckDB, Polars, Parquet, cvxpy/scipy, Streamlit, ruff, pre-com
 
 As datas são **limites**, não metas. A ordem de construção é fixa, mas cada etapa começa assim que a anterior termina, e a publicação sai assim que a projeção base e o dashboard estiverem prontos.
 
-**Ordem de corte se atrasar:** (1) backtest; (2) tabela cidade → país (mostra só a cidade); (3) 2018 (a sensibilidade vira uma divisão igual). A projeção base nunca é cortada.
+**Ordem de corte se atrasar:** (1) referência externa; (2) estabilidade da transferência; (3) backtest. A projeção base nunca é cortada. A tabela cidade → país foi descartada, porque a lista por cidade basta.
 
 ## Publicação e comunicação
 
