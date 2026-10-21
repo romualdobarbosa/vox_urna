@@ -7,6 +7,8 @@ from pathlib import Path
 import plotly.graph_objects as go
 import polars as pl
 
+# O streamlit_app recarrega o módulo quando o arquivo muda (veja recarregar()).
+VERSAO_ARQUIVO = Path(__file__).stat().st_mtime_ns
 DIR_GEO = Path(__file__).resolve().parent / "geo"
 COR = {"lula": "#C8102E", "flavio": "#1F4E9C"}
 NEUTRO = "#F2F2F2"

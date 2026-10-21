@@ -8,6 +8,8 @@ from pathlib import Path
 
 import polars as pl
 
+# O streamlit_app recarrega o módulo quando o arquivo muda (veja recarregar()).
+VERSAO_ARQUIVO = Path(__file__).stat().st_mtime_ns
 DIR_GOLD = Path(__file__).resolve().parent.parent / "data" / "gold"
 ANO_ALVO = 2026
 LADOS = ("lula", "flavio")

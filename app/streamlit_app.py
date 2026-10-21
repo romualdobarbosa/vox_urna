@@ -1,10 +1,30 @@
+import importlib
+from pathlib import Path
+from types import ModuleType
+
 import plotly.graph_objects as go
 import polars as pl
 import streamlit as st
 
 import dados
 import mapa
-from mapa import COR
+
+
+def recarregar(modulo: ModuleType) -> None:
+    """Recarrega o módulo se o arquivo dele mudou desde que foi carregado.
+
+    O Streamlit Cloud reexecuta este script a cada push, mas mantém os módulos importados
+    na versão antiga. Recarregar sempre zeraria o cache da malha em `mapa`, então só
+    recarrega quando o arquivo muda. Cada módulo guarda `VERSAO_ARQUIVO` ao ser
+    carregado; um módulo sem ela é de antes desta regra e também é recarregado.
+    """
+    if getattr(modulo, "VERSAO_ARQUIVO", None) != Path(modulo.__file__).stat().st_mtime_ns:
+        importlib.reload(modulo)
+
+
+recarregar(dados)
+recarregar(mapa)
+from mapa import COR  # noqa: E402  (depois da recarga, para pegar a versão nova)
 
 st.set_page_config(page_title="Vox Urna: projeção do 2º turno de 2026", layout="wide")
 
@@ -25,12 +45,13 @@ def gold(versao: tuple) -> dados.Gold:
 
 
 def versao_gold() -> tuple:
-    """Os campos de `Gold` e o tamanho e a data de cada arquivo da gold."""
+    """A versão de `dados.py`, os campos de `Gold` e o tamanho e a data de cada arquivo da
+    gold."""
     arquivos = tuple(
         (p.name, p.stat().st_size, p.stat().st_mtime_ns)
         for p in sorted(dados.DIR_GOLD.glob("*.parquet"))
     )
-    return tuple(dados.Gold.__dataclass_fields__), arquivos
+    return dados.VERSAO_ARQUIVO, tuple(dados.Gold.__dataclass_fields__), arquivos
 
 
 @st.cache_data
