@@ -5,14 +5,21 @@ import numpy as np
 import pytest
 from test_transferencia import BETA
 
+from vox_urna.gold import construcao
 from vox_urna.gold.construcao import GoldInconsistente, construir
 from vox_urna.gold.lados import LADOS, Finalista
 from vox_urna.gold.transferencia import J, K, rmse_pp
 
-# nr_votavel do lado Lula, do lado Flávio e de um candidato que cai em "outros", como no BU.
+# nr_votavel do lado Lula, do lado Flávio e dos candidatos que caem em "outros", como no BU.
+# Em 2022 são dois, os da referência externa.
 CANDIDATOS = {
     2018: {13: ("FERNANDO HADDAD", "PT"), 17: ("JAIR BOLSONARO", "PSL"), 12: ("CIRO GOMES", "PDT")},
-    2022: {13: ("LULA", "PT"), 22: ("JAIR BOLSONARO", "PL"), 15: ("SIMONE TEBET", "MDB")},
+    2022: {
+        13: ("LULA", "PT"),
+        22: ("JAIR BOLSONARO", "PL"),
+        15: ("SIMONE TEBET", "MDB"),
+        12: ("CIRO GOMES", "PDT"),
+    },
     2026: {13: ("LULA", "PT"), 22: ("FLAVIO BOLSONARO", "PL"), 70: ("AUGUSTO CURY", "AVANTE")},
 }
 # (UF, município, zona, seções). Na referência, a zona 1 tem β próprio e a zona 2, com
@@ -39,9 +46,16 @@ COLUNAS_VOTOS = ("uf", "cd_municipio", "zona", "secao", "nr_votavel", "nm_votave
 
 
 def secao(ano, uf, municipio, zona, numero, aptos, contagens) -> dict:
-    """Seção do silver a partir das contagens (lula, flavio, outros, branco, nulo)."""
+    """Seção do silver a partir das contagens (lula, flavio, outros, branco, nulo).
+
+    Com dois candidatos em "outros", o segundo fica com um terço desses votos.
+    """
     nrs = list(CANDIDATOS[ano])
-    votos = {nr: int(v) for nr, v in zip(nrs, contagens[:3], strict=True) if v > 0}
+    outros = int(contagens[2])
+    por_nr = [contagens[0], contagens[1], outros][: len(nrs)]
+    if len(nrs) == 4:
+        por_nr = [contagens[0], contagens[1], outros - outros // 3, outros // 3]
+    votos = {nr: int(v) for nr, v in zip(nrs, por_nr, strict=True) if v > 0}
     branco, nulo = int(contagens[3]), int(contagens[4])
     comparecimento = sum(votos.values()) + branco + nulo
     return {
@@ -387,3 +401,45 @@ def test_estabilidade_e_a_tvd_de_cada_linha_entre_2018_e_2022(gold_backtest):
         )
         # Os dois anos saem do mesmo BETA, então as linhas pesadas quase não mudam.
         assert max(tvd[k] for k in ("lula", "flavio", "abstencao")) < 0.05
+
+
+def test_referencia_externa_poe_cada_pesquisa_ao_lado_do_beta_brasil_de_outros(gold):
+    linhas = ler(gold, "referencia_externa")
+    pesquisas = [linha for linha in linhas if linha["fonte"] == "pesquisa"]
+    [metodo] = [linha for linha in linhas if linha["fonte"] == "vox_urna"]
+    assert {p["registro_tse"] for p in pesquisas} == {"BR-02012/2022", "BR-08253/2022"}
+
+    # Pesos pelos votos de cada um no 1º turno de 2022: a Tebet tem 2/3 de "outros".
+    [(ciro, tebet)] = duckdb.sql(
+        "select sum(votos) filter (where nr_votavel = 12),"
+        " sum(votos) filter (where nr_votavel = 15)"
+        f" from '{gold}/silver/votos/ano=2022/turno=1/*.parquet'"
+    ).fetchall()
+    peso_ciro = ciro / (ciro + tebet)
+    [datafolha] = [p for p in pesquisas if p["instituto"] == "Datafolha"]
+    assert datafolha["peso_ciro"] == pytest.approx(peso_ciro)
+    assert datafolha["peso_ciro"] + datafolha["peso_tebet"] == pytest.approx(1)
+    assert datafolha["divisao_lula_ciro"] == pytest.approx(31 / (31 + 42))
+    assert datafolha["divisao_lula_tebet"] == pytest.approx(31 / (31 + 29))
+    lula = peso_ciro * 31 + (1 - peso_ciro) * 31
+    bolsonaro = peso_ciro * 42 + (1 - peso_ciro) * 29
+    assert datafolha["divisao_lula"] == pytest.approx(lula / (lula + bolsonaro))
+
+    [outros] = ler(gold, "transferencia_zona_2022", "nivel = 'brasil' and k = 'outros'")
+    assert metodo["divisao_lula"] == pytest.approx(
+        outros["lula"] / (outros["lula"] + outros["flavio"])
+    )
+    assert metodo["peso_ciro"] is None
+
+
+def test_pesquisa_sem_um_dos_candidatos_aborta(tmp_path, monkeypatch):
+    original = Path(construcao.REFERENCIA_EXTERNA).read_text(encoding="utf-8").splitlines()
+    csv = tmp_path / "referencia.csv"
+    # Some a linha do Ciro na PoderData.
+    linhas = [linha for linha in original if not ("PoderData" in linha and ",ciro," in linha)]
+    csv.write_text("\n".join(linhas))
+    monkeypatch.setattr(construcao, "REFERENCIA_EXTERNA", csv)
+    montar_silver(tmp_path)
+
+    with pytest.raises(GoldInconsistente, match="incompletas"):
+        construir(tmp_path)

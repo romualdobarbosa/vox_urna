@@ -23,6 +23,10 @@ CORRESPONDENCIA_IBGE = Path(__file__).parent / "municipios_tse_ibge.csv"
 # Municípios instalados depois da fonte acima: (uf, código TSE, código IBGE). O código IBGE
 # vem de https://servicodados.ibge.gov.br/api/v1/localidades/estados/MT/municipios.
 MUNICIPIOS_NOVOS = [("MT", 73709, 5101837)]  # Boa Esperança do Norte, instalado em 2025
+# Pesquisas de 2022 com cruzamento 1º × 2º turno, curadas dos relatórios originais
+# (vox-urna.md, "Avaliação do método"), e o nome no BU de cada candidato de "outros" delas.
+REFERENCIA_EXTERNA = Path(__file__).parent / "referencia_externa.csv"
+CANDIDATOS_REFERENCIA = {"ciro": "CIRO GOMES", "tebet": "SIMONE TEBET"}
 # Os dois primeiros dígitos do código IBGE são o código da UF.
 CODIGO_UF_IBGE = {
     "RO": 11, "AC": 12, "AM": 13, "RR": 14, "PA": 15, "AP": 16, "TO": 17,
@@ -69,6 +73,7 @@ def construir(dir_dados: Path, *, min_secoes: int = MIN_SECOES_ZONA) -> list[Tab
             )
         _paineis(con, anos_painel)
         _transferencias(con, min_secoes)
+        _referencia_externa(con)
         refs = [ano for ano in (ANO_BASE, ANO_SENSIBILIDADE) if ano in anos_painel]
         _ligacao(con, ANO_ALVO, refs)
         _projecao(con, sensibilidade_2018=ANO_SENSIBILIDADE in refs)
@@ -265,6 +270,96 @@ def _transferencias(con: duckdb.DuckDBPyConnection, min_secoes: int) -> None:
         join n using (ano, uf, zona, k)
         where b.nivel = 'zona'
         group by b.ano, b.k
+        """
+    )
+
+
+def _referencia_externa(con: duckdb.DuckDBPyConnection) -> None:
+    """Cada pesquisa ao lado do β Brasil de "outros" em 2022, sem média entre elas.
+
+    A métrica é Lula ÷ (Lula + Bolsonaro) entre os eleitores de "outros". Numa pesquisa, os
+    percentuais de cada candidato são ponderados pelos votos dele no 1º turno de 2022 nos
+    BUs antes da divisão, que vale tanto na base "total" quanto na de votos válidos.
+    """
+    con.execute(
+        """
+        create table _referencia as
+        select * from read_csv($csv, header = true, columns = {
+            'instituto': 'varchar', 'registro_tse': 'varchar', 'campo_inicio': 'date',
+            'campo_fim': 'date', 'modo': 'varchar', 'n_total': 'integer',
+            'candidato_1t': 'varchar', 'base': 'varchar', 'pct_lula': 'double',
+            'pct_bolsonaro': 'double', 'pct_branco_nulo': 'double', 'pct_indeciso': 'double',
+            'url': 'varchar', 'obs': 'varchar'
+        })
+        """,
+        {"csv": str(REFERENCIA_EXTERNA)},
+    )
+    con.register(
+        "_candidatos_referencia",
+        {
+            "candidato_1t": np.array(list(CANDIDATOS_REFERENCIA)),
+            "nm_votavel": np.array(list(CANDIDATOS_REFERENCIA.values())),
+        },
+    )
+    con.execute(
+        f"""
+        create table _peso_referencia as
+        select c.candidato_1t, sum(v.votos) as votos,
+               sum(v.votos) / sum(sum(v.votos)) over () as peso
+        from _candidatos_referencia c
+        left join votos v on v.nm_votavel = c.nm_votavel and v.ano = {ANO_BASE} and v.turno = 1
+        group by c.candidato_1t
+        """
+    )
+    sem_voto = con.execute(
+        "select candidato_1t from _peso_referencia where votos is null order by all"
+    ).fetchall()
+    if sem_voto:
+        raise GoldInconsistente(f"candidatos da referência externa sem voto no BU: {sem_voto}")
+    candidatos = sorted(CANDIDATOS_REFERENCIA)
+    incompletas = con.execute(
+        """
+        select registro_tse from _referencia
+        group by registro_tse
+        having list_sort(list(candidato_1t)) <> $candidatos
+            or count(distinct base) <> 1
+            or bool_or(base not in ('total', 'votos_validos'))
+            or bool_or(pct_lula is null or pct_bolsonaro is null)
+        order by all
+        """,
+        {"candidatos": candidatos},
+    ).fetchall()
+    if incompletas:
+        raise GoldInconsistente(f"pesquisas da referência externa incompletas: {incompletas}")
+
+    por_candidato = ", ".join(
+        f"any_value(r.pct_lula / (r.pct_lula + r.pct_bolsonaro)) "
+        f"filter (where r.candidato_1t = '{c}') as divisao_lula_{c}"
+        for c in candidatos
+    )
+    pesos = ", ".join(
+        f"any_value(p.peso) filter (where p.candidato_1t = '{c}') as peso_{c}" for c in candidatos
+    )
+    nulos = ", ".join(f"null as divisao_lula_{c}" for c in candidatos)
+    nulos += ", " + ", ".join(f"null as peso_{c}" for c in candidatos)
+    con.execute(
+        f"""
+        create table referencia_externa as
+        select 'pesquisa' as fonte, r.instituto, r.registro_tse,
+               any_value(r.campo_inicio) as campo_inicio, any_value(r.campo_fim) as campo_fim,
+               any_value(r.modo) as modo, any_value(r.n_total) as n_total,
+               any_value(r.base) as base, {por_candidato}, {pesos},
+               sum(p.peso * r.pct_lula) / sum(p.peso * (r.pct_lula + r.pct_bolsonaro))
+                   as divisao_lula,
+               any_value(r.url) as url
+        from _referencia r
+        join _peso_referencia p using (candidato_1t)
+        group by r.instituto, r.registro_tse
+        union all
+        select 'vox_urna', null, null, null, null, null, null, 'beta_brasil_outros_{ANO_BASE}',
+               {nulos}, lula / (lula + flavio), null
+        from beta
+        where ano = {ANO_BASE} and nivel = 'brasil' and k = 'outros'
         """
     )
 
@@ -604,6 +699,7 @@ def _gravar(con: duckdb.DuckDBPyConnection, saida: Path) -> list[Tabela]:
         "projecao_2026": "select * from projecao",
         "taxa_match": "select * from taxa_match",
         "municipio_ibge": "select * from municipio_ibge",
+        "referencia_externa": "select * from referencia_externa",
     }
     if con.execute("select 1 from duckdb_tables() where table_name = 'backtest'").fetchall():
         consultas |= {
