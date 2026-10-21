@@ -186,18 +186,31 @@ st.dataframe(
 st.subheader("Para onde foram os votos")
 st.caption(
     "A transferência estimada numa eleição de referência: de cada 100 eleitores de uma "
-    "categoria no 1º turno (linha), quantos foram para cada categoria no 2º turno (coluna). "
-    "É a estimativa da UF inteira; a projeção usa a de cada zona."
+    "categoria no 1º turno (linha), quantos foram para cada categoria no 2º turno (coluna)."
 )
 anos = sorted(set(g.transferencia_uf["ano"]), reverse=True)
+ufs_ref = [dados.UF_BRASIL, *sorted(set(g.transferencia_uf["uf"]) - {dados.UF_BRASIL})]
 coluna_ano, coluna_uf = st.columns(2)
 ano_ref = coluna_ano.selectbox("Eleição de referência", anos)
 uf_ref = coluna_uf.selectbox(
-    "UF",
-    sorted(set(g.transferencia_uf["uf"])),
-    format_func=lambda uf: dados.NOMES_UF[uf],
-    index=sorted(set(g.transferencia_uf["uf"])).index("SP"),
+    "Abrangência",
+    ufs_ref,
+    format_func=lambda uf: (
+        "Brasil (média das zonas, ponderada pelos eleitores)"
+        if uf == dados.UF_BRASIL
+        else dados.NOMES_UF[uf]
+    ),
 )
+if uf_ref == dados.UF_BRASIL:
+    st.caption(
+        "O Brasil é a média das zonas, ponderada pelos eleitores de cada categoria do "
+        "1º turno. As zonas são a base da projeção. Por isso o Brasil não é a média das UFs: "
+        "cada UF é uma regressão própria sobre todas as suas seções, e as duas estimativas "
+        "podem divergir (em 2022, por exemplo, a fração de eleitores de Lula que foi para "
+        "Jair Bolsonaro fica perto de zero em todas as UFs, mas em 1,1% no Brasil)."
+    )
+else:
+    st.caption("A estimativa da UF inteira, numa regressão própria; a projeção usa a de cada zona.")
 matriz = dados.matriz_transferencia(g.transferencia_uf, g.lados, ano_ref, uf_ref)
 st.dataframe(
     matriz.with_columns(pl.exclude("origem") * 100),

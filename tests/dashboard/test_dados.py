@@ -126,3 +126,12 @@ def test_matriz_de_transferencia_usa_os_nomes_da_eleicao_e_cada_linha_soma_1():
     assert m2018.columns[1:3] == ["Fernando Haddad (PT)", "Jair Bolsonaro (PSL)"]
     somas = m2018.select(pl.sum_horizontal(pl.exclude("origem")))
     assert somas.to_series().to_list() == pytest.approx([1.0] * 6)
+
+
+@pytest.mark.parametrize("ano", [2018, 2022])
+def test_matriz_do_brasil_existe_e_cada_linha_soma_1(ano):
+    gold = dados.carregar()
+    matriz = dados.matriz_transferencia(gold.transferencia_uf, gold.lados, ano, dados.UF_BRASIL)
+    assert matriz.height == 6
+    somas = matriz.select(pl.sum_horizontal(pl.exclude("origem"))).to_series()
+    assert somas.to_list() == pytest.approx([1.0] * 6)

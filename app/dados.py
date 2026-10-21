@@ -12,6 +12,7 @@ DIR_GOLD = Path(__file__).resolve().parent.parent / "data" / "gold"
 ANO_ALVO = 2026
 LADOS = ("lula", "flavio")
 UF_EXTERIOR = "ZZ"
+UF_BRASIL = "BR"  # a chave das linhas do Brasil na matriz de transferência
 
 AVISO = (
     "Não é pesquisa eleitoral. Não houve coleta de opinião com eleitores: é uma projeção "
@@ -75,14 +76,21 @@ class Gold:
     lados: pl.DataFrame
     taxa_match: pl.DataFrame
     municipio_ibge: pl.DataFrame
-    transferencia_uf: pl.DataFrame  # o β no nível UF, de todas as eleições de referência
+    # O β de cada UF e do Brasil (com uf = UF_BRASIL), de todas as eleições de referência.
+    transferencia_uf: pl.DataFrame
 
 
 def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
     transferencia = pl.concat(
         pl.read_parquet(caminho)
-        .filter(pl.col("nivel") == "uf")
-        .with_columns(ano=pl.lit(int(caminho.stem.rsplit("_", 1)[1])))
+        .filter(pl.col("nivel").is_in(["uf", "brasil"]))
+        .with_columns(
+            pl.when(pl.col("nivel") == "brasil")
+            .then(pl.lit(UF_BRASIL))
+            .otherwise(pl.col("uf"))
+            .alias("uf"),
+            ano=pl.lit(int(caminho.stem.rsplit("_", 1)[1])),
+        )
         for caminho in sorted(dir_gold.glob("transferencia_zona_*.parquet"))
     )
     return Gold(
