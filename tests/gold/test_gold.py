@@ -20,6 +20,8 @@ CANDIDATOS = {
 # "municipio") e surge o município 1007 (passo "uf").
 SECOES_REF = [("AC", 1120, 1, 30), ("AC", 1120, 2, 3), ("AC", 1570, 2, 4)]
 SECOES_2026 = [("AC", 1120, 1, 20), ("AC", 1570, 3, 5), ("AC", 1007, 1, 2)]
+# Geografia de 2022 para o backtest, que liga 2022 a 2018 pelos mesmos três passos.
+SECOES_2022_BACKTEST = [("AC", 1120, 1, 30), ("AC", 1570, 3, 12), ("AC", 1007, 1, 3)]
 COLUNAS_SECAO = (
     "uf",
     "cd_municipio",
@@ -80,13 +82,17 @@ def gravar_silver(dados: Path, ano: int, turno: int, secoes: list[dict]) -> None
         con.close()
 
 
-def montar_silver(dados: Path, refs=(2022,), seed=0) -> None:
-    """Cada referência com o 2º turno gerado por BETA a partir do 1º, e o 1º turno de 2026."""
+def montar_silver(dados: Path, refs=(2022,), seed=0, geografia=None) -> None:
+    """Cada referência com o 2º turno gerado por BETA a partir do 1º, e o 1º turno de 2026.
+
+    `geografia` troca as seções de uma referência ({ano: [(uf, município, zona, seções)]}).
+    """
     rng = np.random.default_rng(seed)
     for ano in refs:
         t1, t2 = [], []
+        secoes_ref = (geografia or {}).get(ano, SECOES_REF)
         for numero, (uf, municipio, zona) in enumerate(
-            (uf, m, z) for uf, m, z, n in SECOES_REF for _ in range(n)
+            (uf, m, z) for uf, m, z, n in secoes_ref for _ in range(n)
         ):
             aptos = 20_000
             x = np.floor(rng.dirichlet([8, 7, 2, 0.5, 0.8, 4]) * aptos)
@@ -116,9 +122,13 @@ def beta(linhas: list[dict]) -> np.ndarray:
     return np.array([por_k[k] for k in K])
 
 
-def votos_1t_2026(dados: Path, filtro: str) -> np.ndarray:
-    categorias = ler(dados, "categorias_secao", f"ano = 2026 and {filtro}")
+def votos(dados: Path, ano: int, turno: int, filtro: str) -> np.ndarray:
+    categorias = ler(dados, "categorias_secao", f"ano = {ano} and turno = {turno} and {filtro}")
     return np.array([sum(c[k] * c["aptos"] for c in categorias) for k in K])
+
+
+def votos_1t_2026(dados: Path, filtro: str) -> np.ndarray:
+    return votos(dados, 2026, 1, filtro)
 
 
 @pytest.fixture
@@ -269,3 +279,74 @@ def test_beta_brasil_e_a_media_das_zonas_ponderada_pelos_eleitores_de_cada_categ
         linhas = np.array(list(por_zona.values()))
         assert (linhas.min(axis=0) - 1e-12 <= beta(brasil)[i]).all()
         assert (beta(brasil)[i] <= linhas.max(axis=0) + 1e-12).all()
+
+
+@pytest.fixture
+def gold_backtest(tmp_path):
+    montar_silver(tmp_path, refs=(2018, 2022), geografia={2022: SECOES_2022_BACKTEST})
+    construir(tmp_path)
+    return tmp_path
+
+
+def test_sem_2018_nao_ha_backtest(gold):
+    assert not (gold / "gold" / "backtest_2022.parquet").exists()
+    assert not ler(gold, "taxa_match", "ligacao like 'ligacao_2022%'")
+
+
+def test_backtest_liga_2022_a_2018_pelos_tres_passos(gold_backtest):
+    passos = {
+        (linha["cd_municipio"], linha["zona"]): linha["passo"]
+        for linha in ler(gold_backtest, "ligacao_2022")
+    }
+    assert passos == {(1120, 1): "municipio_zona", (1570, 3): "municipio", (1007, 1): "uf"}
+    assert {linha["ano_ref"] for linha in ler(gold_backtest, "ligacao_2022")} == {2018}
+
+    taxas = ler(gold_backtest, "taxa_match", "ligacao = 'ligacao_2022_ref_2018'")
+    assert {t["passo"]: t["secoes"] for t in taxas} == {
+        "municipio_zona": 30,
+        "municipio": 12,
+        "uf": 3,
+    }
+    assert sum(t["fracao_aptos"] for t in taxas) == pytest.approx(1)
+
+
+def test_backtest_aplica_o_beta_de_2018_ao_1o_turno_de_2022(gold_backtest):
+    filtro = "cd_municipio = 1570"
+    [linha] = ler(gold_backtest, "backtest_2022", f"nivel = 'municipio' and {filtro}")
+    beta_2018 = beta(ler(gold_backtest, "ligacao_2022", filtro))
+    # O município 1570 só estava na zona 2 em 2018, então herda o β dela.
+    zona_2 = ler(gold_backtest, "transferencia_zona_2018", "nivel = 'zona' and zona = 2")
+    np.testing.assert_allclose(beta_2018, beta(zona_2))
+
+    t1 = votos(gold_backtest, 2022, 1, filtro)
+    projetado = t1 @ beta_2018
+    real = votos(gold_backtest, 2022, 2, filtro)[[K.index(j) for j in J]]
+    pct = {
+        "projetado": projetado[0] / (projetado[0] + projetado[1]),
+        "real": real[0] / (real[0] + real[1]),
+    }
+    assert linha["pct_lula_validos_projetado"] == pytest.approx(pct["projetado"])
+    assert linha["pct_lula_validos_real"] == pytest.approx(pct["real"])
+    assert linha["erro_pp"] == pytest.approx(100 * (pct["projetado"] - pct["real"]))
+    for i, j in enumerate(J):
+        esperado = projetado[i] / linha["aptos"] - real[i] / linha["aptos_real"]
+        assert linha[f"erro_aptos_{j}"] == pytest.approx(esperado, abs=1e-12)
+
+    # Os dois turnos saem do mesmo BETA, então o método quase acerta.
+    [brasil] = ler(gold_backtest, "backtest_2022", "nivel = 'brasil'")
+    assert abs(brasil["erro_pp"]) < 0.5
+    assert brasil["vencedor_projetado"] == brasil["vencedor_real"]
+
+
+def test_backtest_conta_os_acertos_do_lado_vencedor(gold_backtest):
+    for nivel in ("uf", "municipio"):
+        linhas = ler(gold_backtest, "backtest_2022", f"nivel = '{nivel}'")
+        [acerto] = ler(gold_backtest, "backtest_2022_acerto", f"nivel = '{nivel}'")
+        certas = [linha for linha in linhas if linha["acertou"]]
+        for linha in linhas:
+            assert linha["acertou"] == (linha["vencedor_projetado"] == linha["vencedor_real"])
+        assert (acerto["unidades"], acerto["acertos"]) == (len(linhas), len(certas))
+        assert acerto["pct_acerto"] == pytest.approx(len(certas) / len(linhas))
+        assert acerto["pct_acerto_aptos"] == pytest.approx(
+            sum(linha["aptos"] for linha in certas) / sum(linha["aptos"] for linha in linhas)
+        )

@@ -70,8 +70,11 @@ def construir(dir_dados: Path, *, min_secoes: int = MIN_SECOES_ZONA) -> list[Tab
         _paineis(con, anos_painel)
         _transferencias(con, min_secoes)
         refs = [ano for ano in (ANO_BASE, ANO_SENSIBILIDADE) if ano in anos_painel]
-        _ligacao(con, refs)
+        _ligacao(con, ANO_ALVO, refs)
         _projecao(con, sensibilidade_2018=ANO_SENSIBILIDADE in refs)
+        if ANO_SENSIBILIDADE in anos_painel:
+            _ligacao(con, ANO_BASE, [ANO_SENSIBILIDADE])
+            _backtest(con)
         _municipio_ibge(con)
 
         tabelas = _gravar(con, saida_tmp)
@@ -264,8 +267,8 @@ def _transferencias(con: duckdb.DuckDBPyConnection, min_secoes: int) -> None:
     )
 
 
-def _ligacao(con: duckdb.DuckDBPyConnection, refs: list[int]) -> None:
-    """Liga cada (UF, município, zona) de 2026 ao β de cada eleição de referência (ADR 0002).
+def _ligacao(con: duckdb.DuckDBPyConnection, ano_alvo: int, refs: list[int]) -> None:
+    """Liga cada (UF, município, zona) de `ano_alvo` ao β de cada referência (ADR 0002).
 
     Passos: (1) a zona da referência com o mesmo par (município, zona); (2) as zonas que
     continham o município, ponderadas pelos aptos; (3) a UF.
@@ -274,10 +277,10 @@ def _ligacao(con: duckdb.DuckDBPyConnection, refs: list[int]) -> None:
     direto = ", ".join(f"b.{j}" for j in J)
     con.execute(
         f"""
-        create table ligacao as
+        create table ligacao_{ano_alvo} as
         with unidade as (
             select uf, cd_municipio, zona, count(*) as secoes, sum(aptos) as aptos
-            from categorias where ano = {ANO_ALVO} and turno = 1
+            from categorias where ano = {ano_alvo} and turno = 1
             group by all
         ),
         ref as (
@@ -331,24 +334,28 @@ def _ligacao(con: duckdb.DuckDBPyConnection, refs: list[int]) -> None:
         select count(*)
         from (
             select distinct uf, cd_municipio, zona
-            from categorias where ano = {ANO_ALVO} and turno = 1
+            from categorias where ano = {ano_alvo} and turno = 1
         ) u
         cross join (select unnest($refs) as ano_ref) a
         left join (
-            select ano_ref, uf, cd_municipio, zona, count(*) as n from ligacao group by all
+            select ano_ref, uf, cd_municipio, zona, count(*) as n
+            from ligacao_{ano_alvo} group by all
         ) l using (ano_ref, uf, cd_municipio, zona)
         where coalesce(l.n, 0) <> {len(K)}
         """,
         {"refs": refs},
     ).fetchall()
     if faltando:
-        raise GoldInconsistente(f"{faltando} (município, zona) de {ANO_ALVO} sem β ligado")
+        raise GoldInconsistente(f"{faltando} (município, zona) de {ano_alvo} sem β ligado")
     con.execute(
         f"""
         insert into taxa_match
-        select 'ligacao_{ANO_ALVO}_ref_' || ano_ref, passo,
+        select 'ligacao_{ano_alvo}_ref_' || ano_ref, passo,
                sum(secoes), sum(aptos), sum(aptos) / sum(sum(aptos)) over (partition by ano_ref)
-        from (select distinct ano_ref, uf, cd_municipio, zona, secoes, aptos, passo from ligacao)
+        from (
+            select distinct ano_ref, uf, cd_municipio, zona, secoes, aptos, passo
+            from ligacao_{ano_alvo}
+        )
         group by ano_ref, passo
         """
     )
@@ -364,13 +371,13 @@ def _projecao(con: duckdb.DuckDBPyConnection, *, sensibilidade_2018: bool) -> No
         outros = f"""
             select 'outros_{ANO_SENSIBILIDADE}' as cenario, uf, cd_municipio, zona, k,
                    {", ".join(J)}
-            from ligacao where ano_ref = {ANO_SENSIBILIDADE} and k = 'outros'
+            from ligacao_{ANO_ALVO} where ano_ref = {ANO_SENSIBILIDADE} and k = 'outros'
         """
     else:
         outros = f"""
             select 'outros_divididos' as cenario, uf, cd_municipio, zona, k,
                    0.5 as lula, 0.5 as flavio, 0.0 as branco, 0.0 as nulo, 0.0 as abstencao
-            from ligacao where ano_ref = {ANO_BASE} and k = 'outros'
+            from ligacao_{ANO_ALVO} where ano_ref = {ANO_BASE} and k = 'outros'
         """
     sensibilidade = f"outros_{ANO_SENSIBILIDADE}" if sensibilidade_2018 else "outros_divididos"
     soma = ", ".join(f"sum(n.votos * b.{j}) as {j}" for j in J)
@@ -380,10 +387,10 @@ def _projecao(con: duckdb.DuckDBPyConnection, *, sensibilidade_2018: bool) -> No
         create table projecao as
         with cenario as (
             select 'base' as cenario, uf, cd_municipio, zona, k, {", ".join(J)}
-            from ligacao where ano_ref = {ANO_BASE}
+            from ligacao_{ANO_ALVO} where ano_ref = {ANO_BASE}
             union all
             select '{sensibilidade}', uf, cd_municipio, zona, k, {", ".join(J)}
-            from ligacao where ano_ref = {ANO_BASE} and k <> 'outros'
+            from ligacao_{ANO_ALVO} where ano_ref = {ANO_BASE} and k <> 'outros'
             union all
             {outros}
         ),
@@ -416,6 +423,99 @@ def _projecao(con: duckdb.DuckDBPyConnection, *, sensibilidade_2018: bool) -> No
         group by grouping sets (
             (cenario), (cenario, uf), (cenario, uf, cd_municipio), (cenario, uf, zona)
         )
+        """
+    )
+
+
+def _backtest(con: duckdb.DuckDBPyConnection) -> None:
+    """Aplica o β de 2018 inteiro ao 1º turno de 2022 e compara com o 2º turno real.
+
+    Só o cenário base, nos níveis Brasil, UF e município, e só com os municípios que
+    votaram nos dois turnos (em 2022, Caracas só votou no 2º). Nada daqui corrige a
+    projeção de 2026 (ADR 0004).
+    """
+    alvo, ref = ANO_BASE, ANO_SENSIBILIDADE
+    soma = ", ".join(f"sum(n.votos * b.{j}) as {j}" for j in J)
+    total = ", ".join(f"sum({j}) as {j}" for j in J)
+    con.execute(
+        f"""
+        create table _backtest_municipio as
+        with unidade as (
+            select uf, cd_municipio, zona, sum(aptos) as aptos,
+                   {", ".join(f"sum({k}) as {k}" for k in K)}
+            from categorias where ano = {alvo} and turno = 1
+            group by uf, cd_municipio, zona
+        ),
+        n as (unpivot unidade on {", ".join(K)} into name k value votos),
+        projetada as (
+            select n.uf, n.cd_municipio, n.zona, n.aptos, {soma}
+            from n
+            join ligacao_{alvo} b using (uf, cd_municipio, zona, k)
+            where b.ano_ref = {ref}
+            group by all
+        ),
+        projetada_municipio as (
+            select uf, cd_municipio, sum(aptos) as aptos, {total}
+            from projetada group by all
+        ),
+        real as (
+            select uf, cd_municipio, any_value(nm_municipio) as nm_municipio,
+                   sum(aptos) as aptos, {total}
+            from categorias where ano = {alvo} and turno = 2
+            group by all
+        )
+        select p.uf, p.cd_municipio, r.nm_municipio, p.aptos, r.aptos as aptos_real,
+               {", ".join(f"p.{j} as {j}_projetado, r.{j} as {j}_real" for j in J)}
+        from projetada_municipio p
+        join real r using (uf, cd_municipio)
+        """
+    )
+
+    def vencedor(lado: str) -> str:
+        return (
+            f"case when sum(lula_{lado}) > sum(flavio_{lado}) then 'lula' "
+            f"when sum(lula_{lado}) < sum(flavio_{lado}) then 'flavio' else 'empate' end"
+        )
+
+    def pct_lula(lado: str) -> str:
+        return f"sum(lula_{lado}) / (sum(lula_{lado}) + sum(flavio_{lado}))"
+
+    # O erro por categoria é a diferença das frações dos aptos de cada turno.
+    erros = ", ".join(
+        f"sum({j}_projetado) / sum(aptos) - sum({j}_real) / sum(aptos_real) as erro_aptos_{j}"
+        for j in J
+    )
+    con.execute(
+        f"""
+        create table backtest as
+        select case when grouping(uf) = 1 then 'brasil'
+                    when grouping(cd_municipio) = 1 then 'uf'
+                    else 'municipio' end as nivel,
+               uf, cd_municipio,
+               if(grouping(cd_municipio) = 0, any_value(nm_municipio), null) as nm_municipio,
+               sum(aptos) as aptos, sum(aptos_real) as aptos_real,
+               {pct_lula("projetado")} as pct_lula_validos_projetado,
+               {pct_lula("real")} as pct_lula_validos_real,
+               100 * ({pct_lula("projetado")} - {pct_lula("real")}) as erro_pp,
+               {vencedor("projetado")} as vencedor_projetado,
+               {vencedor("real")} as vencedor_real,
+               {vencedor("projetado")} = {vencedor("real")} as acertou,
+               {erros}
+        from _backtest_municipio
+        group by grouping sets ((), (uf), (uf, cd_municipio))
+        """
+    )
+    # A % de unidades em que o lado vencedor bateu, sem ponderar e ponderada pelos aptos
+    # do 1º turno. O exterior (ZZ) conta como uma UF a mais, como na projeção.
+    con.execute(
+        """
+        create table backtest_acerto as
+        select nivel, count(*) as unidades, count(*) filter (where acertou) as acertos,
+               avg(acertou::int) as pct_acerto,
+               sum(aptos) filter (where acertou) / sum(aptos) as pct_acerto_aptos
+        from backtest
+        where nivel <> 'brasil'
+        group by nivel
         """
     )
 
@@ -479,11 +579,17 @@ def _gravar(con: duckdb.DuckDBPyConnection, saida: Path) -> list[Tabela]:
             select ano, turno, uf, cd_municipio, nm_municipio, zona, secao, aptos, {fracoes}
             from categorias
         """,
-        "ligacao_2026": "select * from ligacao",
+        "ligacao_2026": f"select * from ligacao_{ANO_ALVO}",
         "projecao_2026": "select * from projecao",
         "taxa_match": "select * from taxa_match",
         "municipio_ibge": "select * from municipio_ibge",
     }
+    if con.execute("select 1 from duckdb_tables() where table_name = 'backtest'").fetchall():
+        consultas |= {
+            f"ligacao_{ANO_BASE}": f"select * from ligacao_{ANO_BASE}",
+            f"backtest_{ANO_BASE}": "select * from backtest",
+            f"backtest_{ANO_BASE}_acerto": "select * from backtest_acerto",
+        }
     for (ano,) in con.execute("select distinct ano from painel").fetchall():
         consultas[f"painel_secao_{ano}"] = f"select * exclude (ano) from painel where ano = {ano}"
         consultas[f"transferencia_zona_{ano}"] = (
