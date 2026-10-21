@@ -57,7 +57,17 @@ def figura(
             marker_line_color="white",
             text=dica,
             hovertemplate="%{text}<extra></extra>",
-            colorbar={"title": {"text": "p.p."}, "ticksuffix": "", "thickness": 12},
+            # Horizontal e embaixo, para não roubar largura do mapa no celular.
+            colorbar={
+                "title": {"text": "p.p.", "side": "right"},
+                "orientation": "h",
+                "thickness": 10,
+                "len": 0.6,
+                "x": 0.5,
+                "xanchor": "center",
+                "y": 0,
+                "yanchor": "top",
+            },
         )
     )
     fig.update_geos(
