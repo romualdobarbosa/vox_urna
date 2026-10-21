@@ -72,7 +72,7 @@ Arquivos em `data/gold/{tabela}.parquet`, reconstruídos inteiros a cada `vox-ur
 - `lados`: a config de lados ([ADR 0003](docs/adr/0003-lados-nomeados-pelo-finalista-de-2026.md)), conferida contra o nome e o partido do BU. O build falha se divergir, ou se um 2º turno tiver voto fora dos lados.
 - `categorias_secao`: cada seção nas categorias do modelo (lados, outros, branco, nulo, abstenção), em fração dos aptos.
 - `painel_secao_{2018,2022}`: o 1º turno juntado ao 2º por `(uf, municipio, zona, secao)`.
-- `transferencia_zona_{2018,2022}`: o β por zona (`nivel = 'zona'`, com `fonte` dizendo se é o próprio ou o da UF) e por UF (`nivel = 'uf'`).
+- `transferencia_zona_{2018,2022}`: o β por zona (`nivel = 'zona'`, com `fonte` dizendo se é o próprio ou o da UF), por UF (`nivel = 'uf'`) e Brasil (`nivel = 'brasil'`, `fonte = 'media_zonas'`). O β Brasil é, para cada linha k, a média dos β das zonas ponderada pelos eleitores da categoria k em cada zona. Ele serve só para leitura; a projeção usa os β de zona e de UF.
 - `ligacao_2026`: o β de cada (UF, município, zona) de 2026 por eleição de referência (`ano_ref`) e o passo da ligação.
 - `projecao_2026`: a projeção por cenário (`base` e `outros_2018`), agregada por zona, município (no exterior, a cidade), UF (`ZZ` é o exterior) e Brasil.
 - `taxa_match`: a taxa de match ponderada pelos aptos de cada painel e de cada passo da ligação.

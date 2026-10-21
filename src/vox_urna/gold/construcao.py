@@ -236,10 +236,30 @@ def _transferencias(con: duckdb.DuckDBPyConnection, min_secoes: int) -> None:
     con.execute(
         """
         create table beta as
-        select cast(ano as integer) as ano, nivel, uf, cast(zona as integer) as zona,
-               cast(secoes as integer) as secoes, cast(aptos as bigint) as aptos, fonte, k,
+        select cast(ano as integer) as ano, cast(nivel as varchar) as nivel,
+               cast(uf as varchar) as uf, cast(zona as integer) as zona,
+               cast(secoes as integer) as secoes, cast(aptos as bigint) as aptos,
+               cast(fonte as varchar) as fonte, cast(k as varchar) as k,
                lula, flavio, branco, nulo, abstencao
         from _beta
+        """
+    )
+    # β Brasil: para cada linha k, a média dos β das zonas (o próprio ou o herdado da UF)
+    # ponderada pelos eleitores da categoria k em cada zona. Só para leitura: a projeção
+    # usa os β de zona e de UF.
+    eleitores = ", ".join(f"sum(aptos_1t * {k}_1t) as {k}" for k in K)
+    media = ", ".join(f"sum(n.eleitores * b.{j}) / sum(n.eleitores) as {j}" for j in J)
+    con.execute(
+        f"""
+        insert into beta
+        with contagem as (select ano, uf, zona, {eleitores} from painel group by all),
+        n as (unpivot contagem on {", ".join(K)} into name k value eleitores)
+        select b.ano, 'brasil', null, null, sum(b.secoes), sum(b.aptos), 'media_zonas', b.k,
+               {media}
+        from beta b
+        join n using (ano, uf, zona, k)
+        where b.nivel = 'zona'
+        group by b.ano, b.k
         """
     )
 

@@ -244,3 +244,28 @@ def test_municipio_sem_codigo_ibge_aborta(tmp_path, monkeypatch):
 
     with pytest.raises(GoldInconsistente, match="sem código IBGE"):
         construir(tmp_path)
+
+
+def test_beta_brasil_e_a_media_das_zonas_ponderada_pelos_eleitores_de_cada_categoria(tmp_path):
+    montar_silver(tmp_path)
+    construir(tmp_path)
+
+    brasil = ler(tmp_path, "transferencia_zona_2022", "nivel = 'brasil'")
+    zonas = ler(tmp_path, "transferencia_zona_2022", "nivel = 'zona'")
+    painel = ler(tmp_path, "painel_secao_2022")
+    assert {(b["uf"], b["zona"], b["fonte"]) for b in brasil} == {(None, None, "media_zonas")}
+    assert {b["secoes"] for b in brasil} == {len(painel)}
+    np.testing.assert_allclose(beta(brasil).sum(axis=1), 1)
+
+    for i, k in enumerate(K):
+        peso = {
+            z["zona"]: sum(p["aptos_1t"] * p[f"{k}_1t"] for p in painel if p["zona"] == z["zona"])
+            for z in zonas
+            if z["k"] == k
+        }
+        por_zona = {z["zona"]: [z[j] for j in J] for z in zonas if z["k"] == k}
+        esperado = sum(peso[z] * np.array(por_zona[z]) for z in peso) / sum(peso.values())
+        np.testing.assert_allclose(beta(brasil)[i], esperado)
+        linhas = np.array(list(por_zona.values()))
+        assert (linhas.min(axis=0) - 1e-12 <= beta(brasil)[i]).all()
+        assert (beta(brasil)[i] <= linhas.max(axis=0) + 1e-12).all()
