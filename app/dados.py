@@ -78,6 +78,12 @@ class Gold:
     municipio_ibge: pl.DataFrame
     # O β de cada UF e do Brasil (com uf = UF_BRASIL), de todas as eleições de referência.
     transferencia_uf: pl.DataFrame
+    # O RMSE do ajuste de cada zona de 2022, a eleição do cenário base.
+    rmse_zona: pl.DataFrame
+    backtest: pl.DataFrame
+    backtest_acerto: pl.DataFrame
+    estabilidade: pl.DataFrame
+    referencia_externa: pl.DataFrame
 
 
 def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
@@ -99,6 +105,14 @@ def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
         taxa_match=pl.read_parquet(dir_gold / "taxa_match.parquet"),
         municipio_ibge=pl.read_parquet(dir_gold / "municipio_ibge.parquet"),
         transferencia_uf=transferencia,
+        rmse_zona=pl.read_parquet(dir_gold / "transferencia_zona_2022.parquet")
+        .filter(pl.col("nivel") == "zona")
+        .select("uf", "zona", "rmse_pp")
+        .unique(["uf", "zona"]),
+        backtest=pl.read_parquet(dir_gold / "backtest_2022.parquet"),
+        backtest_acerto=pl.read_parquet(dir_gold / "backtest_2022_acerto.parquet"),
+        estabilidade=pl.read_parquet(dir_gold / "estabilidade_transferencia.parquet"),
+        referencia_externa=pl.read_parquet(dir_gold / "referencia_externa.parquet"),
     )
 
 
@@ -219,12 +233,24 @@ def tabela_exterior(projecao: pl.DataFrame, cenario: str) -> pl.DataFrame:
     )
 
 
-def tabela_zona(projecao: pl.DataFrame, cenario: str, uf: str | None = None) -> pl.DataFrame:
+def tabela_zona(
+    projecao: pl.DataFrame,
+    cenario: str,
+    uf: str | None = None,
+    rmse_zona: pl.DataFrame | None = None,
+) -> pl.DataFrame:
     """Uma linha por zona (o exterior é uma zona só), da mais favorável a Lula à mais
-    favorável a Flávio."""
+    favorável a Flávio.
+
+    Com `rmse_zona`, ganha a coluna `rmse_pp` do ajuste da zona de mesmo número em 2022,
+    nula na zona de 2026 que não existia em 2022.
+    """
     zonas = projecao.filter((pl.col("nivel") == "zona") & (pl.col("cenario") == cenario))
     if uf is not None:
         zonas = zonas.filter(pl.col("uf") == uf)
+    if rmse_zona is not None:
+        zonas = zonas.join(rmse_zona, on=["uf", "zona"], how="left", validate="1:1")
+    extras = ["rmse_pp"] if rmse_zona is not None else []
     return zonas.select(
         "uf",
         pl.when(pl.col("uf") == UF_EXTERIOR)
@@ -235,6 +261,7 @@ def tabela_zona(projecao: pl.DataFrame, cenario: str, uf: str | None = None) -> 
         "pct_lula_validos",
         "pct_flavio_validos",
         (pl.col("pct_lula_validos") - pl.col("pct_flavio_validos")).alias("margem_lula"),
+        *extras,
     ).sort("margem_lula", "nome", descending=[True, False])
 
 
@@ -260,6 +287,91 @@ def matriz_transferencia(
             pl.col("k").replace_strict(nomes).alias("origem"),
             *(pl.col(j).alias(nomes[j]) for j in destinos),
         )
+    )
+
+
+def divisao_outros(transferencia_uf: pl.DataFrame, ano: int, uf: str = UF_BRASIL) -> float:
+    """Dos eleitores de outros candidatos que escolheram um lado no 2º turno, a fração que
+    foi para o lado Lula."""
+    outros = transferencia_uf.filter(
+        (pl.col("ano") == ano) & (pl.col("uf") == uf) & (pl.col("k") == "outros")
+    ).row(0, named=True)
+    return outros["lula"] / (outros["lula"] + outros["flavio"])
+
+
+def brancos_nulos_abstencao(linha: dict) -> tuple[float, float]:
+    """Brancos e nulos em fração do comparecimento, e a abstenção em fração dos aptos."""
+    comparecimento = sum(linha[c] for c in (*LADOS, "branco", "nulo"))
+    return (linha["branco"] + linha["nulo"]) / comparecimento, linha["abstencao"] / linha["aptos"]
+
+
+@dataclass(frozen=True)
+class ResumoBacktest:
+    erro_pp: float  # com sinal: positivo quando o método deu mais ao lado Lula que o real
+    projetado: float
+    real: float
+    ufs: int  # as UFs do Brasil, sem o exterior
+    ufs_erradas: list[str]
+    acertou_exterior: bool
+    pct_municipios: float
+
+
+def resumo_backtest(backtest: pl.DataFrame, acerto: pl.DataFrame) -> ResumoBacktest:
+    """O erro do backtest no Brasil e o acerto do vencedor, para a linha sob a manchete."""
+    brasil = backtest.filter(pl.col("nivel") == "brasil").row(0, named=True)
+    ufs = backtest.filter((pl.col("nivel") == "uf") & (pl.col("uf") != UF_EXTERIOR))
+    exterior = backtest.filter((pl.col("nivel") == "uf") & (pl.col("uf") == UF_EXTERIOR))
+    municipios = acerto.filter(pl.col("nivel") == "municipio").row(0, named=True)
+    return ResumoBacktest(
+        erro_pp=brasil["erro_pp"],
+        projetado=brasil["pct_lula_validos_projetado"],
+        real=brasil["pct_lula_validos_real"],
+        ufs=ufs.height,
+        ufs_erradas=[NOMES_UF[uf] for uf in ufs.filter(~pl.col("acertou"))["uf"].sort()],
+        acertou_exterior=bool(exterior["acertou"].all()),
+        pct_municipios=municipios["pct_acerto"],
+    )
+
+
+def tabela_backtest_uf(backtest: pl.DataFrame) -> pl.DataFrame:
+    """Uma linha por UF (o exterior por último): o lado Lula projetado e o real em 2022."""
+    return (
+        backtest.filter(pl.col("nivel") == "uf")
+        .sort(pl.col("uf") == UF_EXTERIOR, "uf")
+        .select(
+            pl.col("uf").replace_strict(NOMES_UF, default=pl.col("uf")).alias("nome"),
+            pl.col("pct_lula_validos_projetado").alias("projetado"),
+            pl.col("pct_lula_validos_real").alias("real"),
+            "erro_pp",
+            "acertou",
+        )
+    )
+
+
+ROTULOS_LINHA = {
+    "lula": "Lado Lula",
+    "flavio": "Lado Flávio",
+    **CATEGORIAS,
+    **CATEGORIAS_FIM,
+}
+
+
+def tabela_estabilidade(estabilidade: pl.DataFrame) -> pl.DataFrame:
+    """A TVD de cada categoria do 1º turno entre 2018 e 2022 no Brasil, da maior à menor."""
+    return (
+        estabilidade.filter(pl.col("nivel") == "brasil")
+        .select(pl.col("k").replace_strict(ROTULOS_LINHA).alias("categoria"), "tvd")
+        .sort("tvd", descending=True)
+    )
+
+
+def tabela_referencia(referencia: pl.DataFrame) -> pl.DataFrame:
+    """As pesquisas primeiro e o método por último, cada uma com o rótulo que a identifica."""
+    return referencia.sort(pl.col("fonte") != "pesquisa", "instituto").with_columns(
+        pl.when(pl.col("fonte") == "pesquisa")
+        .then(pl.col("instituto"))
+        .otherwise(pl.lit("Este método"))
+        .alias("rotulo")
     )
 
 

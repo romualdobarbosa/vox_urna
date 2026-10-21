@@ -135,3 +135,48 @@ def test_matriz_do_brasil_existe_e_cada_linha_soma_1(ano):
     assert matriz.height == 6
     somas = matriz.select(pl.sum_horizontal(pl.exclude("origem"))).to_series()
     assert somas.to_list() == pytest.approx([1.0] * 6)
+
+
+def test_ranking_de_zonas_traz_o_rmse_de_2022_e_mantem_a_ordem():
+    gold = dados.carregar()
+    zonas = dados.tabela_zona(gold.projecao, "base", rmse_zona=gold.rmse_zona)
+    assert zonas.height == dados.tabela_zona(gold.projecao, "base").height
+    assert zonas["margem_lula"].is_sorted(descending=True)
+    assert zonas["rmse_pp"].null_count() < 10
+    assert zonas["rmse_pp"].min() >= 0
+
+
+def test_divisao_de_outros_inverte_entre_2018_e_2022():
+    gold = dados.carregar()
+    assert dados.divisao_outros(gold.transferencia_uf, 2018) > 0.6
+    assert dados.divisao_outros(gold.transferencia_uf, 2022) < 0.5
+
+
+def test_brancos_nulos_sobre_o_comparecimento_e_abstencao_sobre_os_aptos():
+    linha = {"lula": 40, "flavio": 40, "branco": 10, "nulo": 10, "abstencao": 25, "aptos": 125}
+    assert dados.brancos_nulos_abstencao(linha) == pytest.approx((0.2, 0.2))
+
+
+def test_resumo_do_backtest_tem_sinal_e_separa_o_exterior():
+    gold = dados.carregar()
+    resumo = dados.resumo_backtest(gold.backtest, gold.backtest_acerto)
+    assert resumo.erro_pp == pytest.approx((resumo.projetado - resumo.real) * 100)
+    assert resumo.ufs == 27
+    assert dados.NOMES_UF[dados.UF_EXTERIOR] not in resumo.ufs_erradas
+    uf = dados.tabela_backtest_uf(gold.backtest)
+    assert uf.height == 28
+    assert uf["nome"][-1] == "Exterior"
+
+
+def test_estabilidade_tem_as_seis_categorias_do_1o_turno():
+    gold = dados.carregar()
+    tvd = dados.tabela_estabilidade(gold.estabilidade)
+    assert set(tvd["categoria"]) == set(dados.ROTULOS_LINHA.values())
+    assert tvd["tvd"].is_sorted(descending=True)
+
+
+def test_referencia_externa_poe_o_metodo_por_ultimo():
+    gold = dados.carregar()
+    ref = dados.tabela_referencia(gold.referencia_externa)
+    assert ref["rotulo"][-1] == "Este método"
+    assert ref.filter(pl.col("fonte") == "pesquisa")["registro_tse"].null_count() == 0
