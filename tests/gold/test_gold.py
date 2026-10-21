@@ -7,7 +7,7 @@ from test_transferencia import BETA
 
 from vox_urna.gold.construcao import GoldInconsistente, construir
 from vox_urna.gold.lados import LADOS, Finalista
-from vox_urna.gold.transferencia import J, K
+from vox_urna.gold.transferencia import J, K, rmse_pp
 
 # nr_votavel do lado Lula, do lado Flávio e de um candidato que cai em "outros", como no BU.
 CANDIDATOS = {
@@ -350,3 +350,21 @@ def test_backtest_conta_os_acertos_do_lado_vencedor(gold_backtest):
         assert acerto["pct_acerto_aptos"] == pytest.approx(
             sum(linha["aptos"] for linha in certas) / sum(linha["aptos"] for linha in linhas)
         )
+
+
+def test_rmse_da_zona_usa_o_beta_aplicado_as_suas_secoes_e_nao_existe_no_brasil(gold):
+    painel = ler(gold, "painel_secao_2022")
+    transferencia = ler(gold, "transferencia_zona_2022")
+
+    def esperado(secoes, linhas):
+        x = np.array([[s[f"{k}_1t"] for k in K] for s in secoes])
+        y = np.array([[s[f"{j}_2t"] for j in J] for s in secoes])
+        return rmse_pp(x, y, np.array([s["aptos_1t"] for s in secoes], dtype=float), beta(linhas))
+
+    for nivel, zona in (("zona", 1), ("zona", 2), ("uf", None)):
+        linhas = [t for t in transferencia if t["nivel"] == nivel and t["zona"] == zona]
+        secoes = [s for s in painel if zona is None or s["zona"] == zona]
+        assert [t["rmse_pp"] for t in linhas] == pytest.approx([esperado(secoes, linhas)] * 6)
+    # O 2º turno sintético é o 1º vezes BETA arredondado: o ajuste fica abaixo de 0,1 pp.
+    assert max(t["rmse_pp"] for t in transferencia if t["nivel"] != "brasil") < 0.1
+    assert {t["rmse_pp"] for t in transferencia if t["nivel"] == "brasil"} == {None}

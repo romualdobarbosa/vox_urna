@@ -7,7 +7,7 @@ import duckdb
 import numpy as np
 
 from vox_urna.gold.lados import LADOS
-from vox_urna.gold.transferencia import J, K, estimar_beta
+from vox_urna.gold.transferencia import J, K, estimar_beta, rmse_pp
 
 log = logging.getLogger(__name__)
 
@@ -211,16 +211,17 @@ def _transferencias(con: duckdb.DuckDBPyConnection, min_secoes: int) -> None:
 
     linhas: list[tuple] = []
 
-    def registrar(ano, nivel, uf, zona, secoes, aptos, fonte, beta):
+    def registrar(ano, nivel, uf, zona, idx, fonte, beta):
+        aptos, rmse = peso[idx].sum(), rmse_pp(x[idx], y[idx], peso[idx], beta)
         for i, k in enumerate(K):
-            linhas.append((ano, nivel, uf, zona, secoes, aptos, fonte, k, *beta[i]))
+            linhas.append((ano, nivel, uf, zona, len(idx), aptos, fonte, k, *beta[i], rmse))
 
     grupo_uf = np.char.add(dados["ano"].astype(str), np.asarray(dados["uf"], dtype=str))
     for g in np.unique(grupo_uf):
         no_uf = np.flatnonzero(grupo_uf == g)
         ano, uf = int(dados["ano"][no_uf[0]]), str(dados["uf"][no_uf[0]])
         beta_uf = estimar_beta(x[no_uf], y[no_uf], peso[no_uf])
-        registrar(ano, "uf", uf, None, len(no_uf), peso[no_uf].sum(), "uf", beta_uf)
+        registrar(ano, "uf", uf, None, no_uf, "uf", beta_uf)
         zonas = dados["zona"][no_uf]
         for zona in np.unique(zonas):
             idx = no_uf[zonas == zona]
@@ -228,10 +229,10 @@ def _transferencias(con: duckdb.DuckDBPyConnection, min_secoes: int) -> None:
                 beta, fonte = estimar_beta(x[idx], y[idx], peso[idx]), "zona"
             else:
                 beta, fonte = beta_uf, "uf"
-            registrar(ano, "zona", uf, int(zona), len(idx), peso[idx].sum(), fonte, beta)
+            registrar(ano, "zona", uf, int(zona), idx, fonte, beta)
         log.info("%s %s: β de %d zonas", ano, uf, len(np.unique(zonas)))
 
-    nomes = ["ano", "nivel", "uf", "zona", "secoes", "aptos", "fonte", "k", *J]
+    nomes = ["ano", "nivel", "uf", "zona", "secoes", "aptos", "fonte", "k", *J, "rmse_pp"]
     con.register(
         "_beta",
         {nome: np.array([linha[i] for linha in linhas]) for i, nome in enumerate(nomes)},
@@ -243,13 +244,13 @@ def _transferencias(con: duckdb.DuckDBPyConnection, min_secoes: int) -> None:
                cast(uf as varchar) as uf, cast(zona as integer) as zona,
                cast(secoes as integer) as secoes, cast(aptos as bigint) as aptos,
                cast(fonte as varchar) as fonte, cast(k as varchar) as k,
-               lula, flavio, branco, nulo, abstencao
+               lula, flavio, branco, nulo, abstencao, rmse_pp
         from _beta
         """
     )
     # β Brasil: para cada linha k, a média dos β das zonas (o próprio ou o herdado da UF)
     # ponderada pelos eleitores da categoria k em cada zona. Só para leitura: a projeção
-    # usa os β de zona e de UF.
+    # usa os β de zona e de UF. Não há RMSE no Brasil, porque esse β não é ajustado a seções.
     eleitores = ", ".join(f"sum(aptos_1t * {k}_1t) as {k}" for k in K)
     media = ", ".join(f"sum(n.eleitores * b.{j}) / sum(n.eleitores) as {j}" for j in J)
     con.execute(
@@ -258,7 +259,7 @@ def _transferencias(con: duckdb.DuckDBPyConnection, min_secoes: int) -> None:
         with contagem as (select ano, uf, zona, {eleitores} from painel group by all),
         n as (unpivot contagem on {", ".join(K)} into name k value eleitores)
         select b.ano, 'brasil', null, null, sum(b.secoes), sum(b.aptos), 'media_zonas', b.k,
-               {media}
+               {media}, null
         from beta b
         join n using (ano, uf, zona, k)
         where b.nivel = 'zona'

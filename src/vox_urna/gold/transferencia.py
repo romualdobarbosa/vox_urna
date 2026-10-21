@@ -41,3 +41,13 @@ def estimar_beta(x: np.ndarray, y: np.ndarray, peso: np.ndarray) -> np.ndarray:
         raise EstimacaoFalhou(resultado.message)
     beta = np.clip(resultado.x.reshape(k, j), 0, None)
     return beta / beta.sum(axis=1, keepdims=True)
+
+
+def rmse_pp(x: np.ndarray, y: np.ndarray, peso: np.ndarray, beta: np.ndarray) -> float:
+    """RMSE dos resíduos y − xβ, em pontos percentuais da fração dos aptos.
+
+    A média dos quadrados corre sobre as seções, ponderadas pelos aptos, e sobre as J
+    categorias do 2º turno.
+    """
+    residuo = y - x @ beta
+    return float(100 * np.sqrt(np.sum(peso[:, None] * residuo**2) / (peso.sum() * y.shape[1])))

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from vox_urna.gold.transferencia import J, K, estimar_beta
+from vox_urna.gold.transferencia import J, K, estimar_beta, rmse_pp
 
 BETA = np.array(
     [
@@ -51,3 +51,17 @@ def test_beta_respeita_as_restricoes_mesmo_com_dados_ruins():
     assert beta.shape == (len(K), len(J))
     assert (beta >= 0).all()
     np.testing.assert_allclose(beta.sum(axis=1), 1)
+
+
+def test_rmse_e_a_raiz_da_media_dos_residuos_ponderada_pelos_aptos_em_pp():
+    x, y, peso = secoes_sinteticas(BETA, 50, ruido=0)
+    assert rmse_pp(x, y, peso, BETA) == pytest.approx(0, abs=1e-12)
+
+    # Resíduo de 0,01 em todas as categorias de uma seção e zero na outra, com o dobro
+    # dos aptos: a média dos quadrados é 0,01² / 3.
+    desvio = np.zeros((2, len(J)))
+    desvio[0] = 0.01
+    x2 = x[:2]
+    assert rmse_pp(x2, x2 @ BETA + desvio, np.array([100.0, 200.0]), BETA) == pytest.approx(
+        100 * 0.01 / np.sqrt(3)
+    )
