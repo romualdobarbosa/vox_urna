@@ -18,8 +18,19 @@ ASSINATURA = (
 
 
 @st.cache_data
-def gold() -> dados.Gold:
+def gold(versao: tuple) -> dados.Gold:
+    """`versao` só serve de chave: o Streamlit Cloud recarrega o app a cada push sem
+    reiniciar o processo, e sem ela o cache devolveria a gold e o `Gold` antigos."""
     return dados.carregar()
+
+
+def versao_gold() -> tuple:
+    """Os campos de `Gold` e o tamanho e a data de cada arquivo da gold."""
+    arquivos = tuple(
+        (p.name, p.stat().st_size, p.stat().st_mtime_ns)
+        for p in sorted(dados.DIR_GOLD.glob("*.parquet"))
+    )
+    return tuple(dados.Gold.__dataclass_fields__), arquivos
 
 
 @st.cache_data
@@ -38,7 +49,7 @@ def em_pct(tabela: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-g = gold()
+g = gold(versao_gold())
 nomes = dados.finalistas(g.lados)
 ids_cenario = dados.cenarios(g.projecao)
 match = dados.taxa_match_ligacao(g.taxa_match, 2022)
