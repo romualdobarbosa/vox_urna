@@ -288,8 +288,9 @@ def gold_backtest(tmp_path):
     return tmp_path
 
 
-def test_sem_2018_nao_ha_backtest(gold):
+def test_sem_2018_nao_ha_backtest_nem_estabilidade(gold):
     assert not (gold / "gold" / "backtest_2022.parquet").exists()
+    assert not (gold / "gold" / "estabilidade_transferencia.parquet").exists()
     assert not ler(gold, "taxa_match", "ligacao like 'ligacao_2022%'")
 
 
@@ -368,3 +369,21 @@ def test_rmse_da_zona_usa_o_beta_aplicado_as_suas_secoes_e_nao_existe_no_brasil(
     # O 2º turno sintético é o 1º vezes BETA arredondado: o ajuste fica abaixo de 0,1 pp.
     assert max(t["rmse_pp"] for t in transferencia if t["nivel"] != "brasil") < 0.1
     assert {t["rmse_pp"] for t in transferencia if t["nivel"] == "brasil"} == {None}
+
+
+def test_estabilidade_e_a_tvd_de_cada_linha_entre_2018_e_2022(gold_backtest):
+    estabilidade = ler(gold_backtest, "estabilidade_transferencia")
+    assert {(e["nivel"], e["uf"]) for e in estabilidade} == {("brasil", None), ("uf", "AC")}
+    assert len(estabilidade) == 2 * len(K)
+
+    for nivel in ("brasil", "uf"):
+        betas = [
+            beta(ler(gold_backtest, f"transferencia_zona_{ano}", f"nivel = '{nivel}'"))
+            for ano in (2018, 2022)
+        ]
+        tvd = {e["k"]: e["tvd"] for e in estabilidade if e["nivel"] == nivel}
+        np.testing.assert_allclose(
+            [tvd[k] for k in K], 0.5 * np.abs(betas[0] - betas[1]).sum(axis=1)
+        )
+        # Os dois anos saem do mesmo BETA, então as linhas pesadas quase não mudam.
+        assert max(tvd[k] for k in ("lula", "flavio", "abstencao")) < 0.05

@@ -75,6 +75,7 @@ def construir(dir_dados: Path, *, min_secoes: int = MIN_SECOES_ZONA) -> list[Tab
         if ANO_SENSIBILIDADE in anos_painel:
             _ligacao(con, ANO_BASE, [ANO_SENSIBILIDADE])
             _backtest(con)
+            _estabilidade(con)
         _municipio_ibge(con)
 
         tabelas = _gravar(con, saida_tmp)
@@ -521,6 +522,25 @@ def _backtest(con: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def _estabilidade(con: duckdb.DuckDBPyConnection) -> None:
+    """TVD de cada linha k do β entre 2018 e 2022, no Brasil e por UF: 0,5 · Σ_j |p − q|.
+
+    A linha "outros" junta candidatos diferentes em cada ano, então a sua TVD compara
+    eleitorados de composição diferente.
+    """
+    distancia = " + ".join(f"abs(a.{j} - b.{j})" for j in J)
+    con.execute(
+        f"""
+        create table estabilidade as
+        select a.nivel, a.uf, a.k, 0.5 * ({distancia}) as tvd
+        from beta a
+        join beta b on (b.nivel, b.uf, b.k) is not distinct from (a.nivel, a.uf, a.k)
+        where a.ano = {ANO_SENSIBILIDADE} and b.ano = {ANO_BASE}
+            and a.nivel in ('brasil', 'uf')
+        """
+    )
+
+
 def _municipio_ibge(con: duckdb.DuckDBPyConnection) -> None:
     """Código IBGE de cada município brasileiro de 2026, para o mapa; o exterior fica fora."""
     con.execute(
@@ -590,6 +610,7 @@ def _gravar(con: duckdb.DuckDBPyConnection, saida: Path) -> list[Tabela]:
             f"ligacao_{ANO_BASE}": f"select * from ligacao_{ANO_BASE}",
             f"backtest_{ANO_BASE}": "select * from backtest",
             f"backtest_{ANO_BASE}_acerto": "select * from backtest_acerto",
+            "estabilidade_transferencia": "select * from estabilidade",
         }
     for (ano,) in con.execute("select distinct ano from painel").fetchall():
         consultas[f"painel_secao_{ano}"] = f"select * exclude (ano) from painel where ano = {ano}"
