@@ -17,8 +17,9 @@ UF_EXTERIOR = "ZZ"
 UF_BRASIL = "BR"  # a chave das linhas do Brasil na matriz de transferência
 
 AVISO = (
-    "Não é pesquisa eleitoral. Não houve coleta de opinião com eleitores: é uma projeção "
-    "com metodologia própria, a partir dos dados oficiais das urnas, abertos a qualquer cidadão."
+    "Isto não é pesquisa eleitoral. Ninguém foi entrevistado. É uma projeção com metodologia "
+    "própria, feita a partir dos dados oficiais das urnas, que o TSE deixa abertos pra "
+    "qualquer cidadão."
 )
 
 # O BU traz o nome em maiúsculas e sem acento.
@@ -33,30 +34,28 @@ class Cenario:
 
 CENARIOS = {
     "base": Cenario(
-        titulo="Base: transferência de 2022",
+        titulo="Base (como em 2022)",
         suposicoes=(
-            "Em cada zona, os eleitores de cada categoria do 1º turno de 2026 (Lula, Flávio "
-            "Bolsonaro, outros candidatos, branco, nulo e abstenção) se distribuem no 2º turno "
-            "como a categoria equivalente se distribuiu em 2022. Quem votou em Lula no 1º turno "
-            "se comporta como quem votou em Lula em 2022; quem votou em Flávio se comporta como "
-            "quem votou em Jair Bolsonaro em 2022; e quem votou em outros candidatos se comporta "
-            "como os eleitores de Ciro, Tebet e dos demais em 2022."
+            "Em cada zona, cada grupo de eleitores do 1º turno de 2026 (quem votou em Lula, em "
+            "Flávio Bolsonaro, em outros candidatos, em branco, nulo ou não foi votar) se divide "
+            "no 2º turno do mesmo jeito que o grupo equivalente se dividiu em 2022. Quem votou "
+            "em Flávio age como quem votou em Jair Bolsonaro, e quem votou em outros candidatos "
+            "age como os eleitores de Ciro, Tebet e dos demais em 2022."
         ),
     ),
     "outros_2018": Cenario(
-        titulo="Sensibilidade: outros como em 2018",
+        titulo="Outros como em 2018",
         suposicoes=(
-            "Igual ao cenário base, exceto pelos eleitores de outros candidatos no 1º turno: "
-            "eles se distribuem no 2º turno como os eleitores de outros candidatos se "
-            "distribuíram em 2018, entre Haddad e Jair Bolsonaro. Os demais grupos seguem a "
-            "transferência de 2022."
+            "Igual ao cenário base, menos pra quem votou em outros candidatos. Esses eleitores "
+            "se dividem como os de outros candidatos se dividiram em 2018, entre Haddad e Jair "
+            "Bolsonaro. Os demais grupos seguem 2022."
         ),
     ),
     "outros_divididos": Cenario(
-        titulo="Sensibilidade: outros divididos ao meio",
+        titulo="Outros divididos ao meio",
         suposicoes=(
-            "Igual ao cenário base, exceto pelos eleitores de outros candidatos no 1º turno: "
-            "metade vai para Lula e metade para Flávio Bolsonaro."
+            "Igual ao cenário base, menos pra quem votou em outros candidatos, que vão metade "
+            "pra Lula e metade pra Flávio Bolsonaro."
         ),
     ),
 }
@@ -88,6 +87,7 @@ class Gold:
     referencia_externa: pl.DataFrame
     viradas: pl.DataFrame
     viradas_resumo: pl.DataFrame
+    primeiro_turno: pl.DataFrame
 
 
 def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
@@ -119,6 +119,7 @@ def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
         referencia_externa=pl.read_parquet(dir_gold / "referencia_externa.parquet"),
         viradas=pl.read_parquet(dir_gold / "viradas_municipio.parquet"),
         viradas_resumo=pl.read_parquet(dir_gold / "viradas_municipio_resumo.parquet"),
+        primeiro_turno=pl.read_parquet(dir_gold / "primeiro_turno_2026.parquet"),
     )
 
 
@@ -383,9 +384,9 @@ def tabela_referencia(referencia: pl.DataFrame) -> pl.DataFrame:
 
 SENTIDOS = {"lula_para_flavio": "Lula → Flávio", "flavio_para_lula": "Flávio → Lula"}
 RESSALVA_VIRADAS = (
-    "Compara o 2º turno de 2022 com o 1º turno de 2026, só entre os dois lados. Em 2026, quem "
-    "votou em outros candidatos ainda não escolheu um lado; isto descreve o 1º turno, não é "
-    "uma projeção."
+    "Aqui comparo o 2º turno de 2022 com o 1º turno de 2026, contando só os votos dos dois "
+    "lados. Quem votou em outros candidatos em 2026 ainda não escolheu um lado, então isso é "
+    "uma foto do 1º turno, não uma projeção."
 )
 
 
@@ -415,6 +416,20 @@ def tabela_viradas(viradas: pl.DataFrame, uf: str | None = None) -> pl.DataFrame
         )
         .sort(pl.col("variacao_pp").abs(), "nome", descending=[True, False])
     )
+
+
+def primeiro_turno_brasil(primeiro_turno: pl.DataFrame) -> dict[str, float]:
+    """O 1º turno de 2026 no Brasil: a fração dos válidos de cada lado e de outros, e os votos
+    de outros e a diferença do lado Flávio para o lado Lula."""
+    r = primeiro_turno.filter(pl.col("nivel") == "brasil").row(0, named=True)
+    validos = r["lula"] + r["flavio"] + r["outros"]
+    return {
+        "lula": r["lula"] / validos,
+        "flavio": r["flavio"] / validos,
+        "outros": r["outros"] / validos,
+        "votos_outros": r["outros"],
+        "diferenca_votos": r["flavio"] - r["lula"],
+    }
 
 
 def taxa_match_ligacao(taxa_match: pl.DataFrame, ano_ref: int) -> dict[str, float]:

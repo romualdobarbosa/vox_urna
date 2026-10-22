@@ -215,3 +215,10 @@ def test_viradas_de_uma_uf_batem_com_o_resumo_dela():
     lula_para_flavio = viradas.filter(pl.col("sentido") == "Lula → Flávio")["variacao_pp"]
     assert (lula_para_flavio < 0).all()
     assert resumo["lula_para_flavio"]["menor_variacao_pp"] == pytest.approx(lula_para_flavio.max())
+
+
+def test_primeiro_turno_brasil_soma_os_validos_e_poe_flavio_na_frente():
+    p = dados.primeiro_turno_brasil(dados.carregar().primeiro_turno)
+
+    assert p["lula"] + p["flavio"] + p["outros"] == pytest.approx(1)
+    assert p["diferenca_votos"] > 0
