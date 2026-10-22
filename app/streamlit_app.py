@@ -109,6 +109,11 @@ def config_colunas(rotulo: str) -> dict:
     }
 
 
+def pontos(valor: float) -> str:
+    """Uma diferença em pontos percentuais, com sinal: -7.25 → "-7,3 p.p."."""
+    return f"{valor:+.1f}".replace(".", ",") + " p.p."
+
+
 def texto_backtest() -> str:
     """A linha do erro do backtest sob a manchete, com sinal (ADR 0004)."""
     sentido = "a mais" if backtest.erro_pp > 0 else "a menos"
@@ -394,6 +399,91 @@ with aba_dados:
             "A estimativa da UF inteira, numa regressão própria; a projeção usa a de cada zona."
         )
     mostrar_matriz(ano_ref, uf_ref)
+
+    st.subheader("Viradas por município: 2º turno de 2022 × 1º turno de 2026")
+    st.markdown(
+        "Os municípios em que o lado na frente mudou: quem liderava entre Lula e Jair "
+        "Bolsonaro no 2º turno de 2022 e quem lidera entre Lula e Flávio Bolsonaro no 1º turno "
+        "de 2026. No exterior, cada cidade com consulado conta como um município. Não depende "
+        "do cenário."
+    )
+    st.info(dados.RESSALVA_VIRADAS)
+    uf_virada = st.selectbox(
+        "Abrangência das viradas",
+        [None, *sorted(set(g.viradas_resumo["uf"].drop_nulls()))],
+        format_func=lambda uf: "Brasil" if uf is None else dados.NOMES_UF[uf],
+    )
+    resumo_virada = dados.resumo_viradas(g.viradas_resumo, uf_virada)
+    # A cor é a do lado que passou a ficar na frente.
+    cores_virada = {"lula_para_flavio": COR["flavio"], "flavio_para_lula": COR["lula"]}
+    for coluna, (sentido, rotulo) in zip(st.columns(2), dados.SENTIDOS.items(), strict=True):
+        r = resumo_virada[sentido]
+        coluna.markdown(
+            f"<div style='border-left: 6px solid {cores_virada[sentido]}; padding-left: 12px; "
+            "margin-bottom: 12px'>"
+            f"<div style='font-size: 1.1rem'>{rotulo}</div>"
+            f"<div style='font-size: 2.4rem; font-weight: 700; color: {cores_virada[sentido]}'>"
+            f"{dados.inteiro(r['viradas'])} município{'s' if r['viradas'] != 1 else ''}</div>"
+            f"<div style='opacity: 0.7'>{dados.pct(r['pct_municipios'])} dos "
+            f"{dados.inteiro(r['municipios_pareados'])} municípios comparáveis · "
+            f"{dados.pct(r['pct_aptos_2026'])} dos eleitores aptos de 2026</div></div>",
+            unsafe_allow_html=True,
+        )
+        if not r["viradas"]:
+            continue
+        maior, menor, media = coluna.columns(3)
+        for metrica, rotulo_metrica, chave in (
+            (maior, "Maior variação", "maior"),
+            (menor, "Menor variação", "menor"),
+        ):
+            metrica.metric(rotulo_metrica, pontos(r[f"{chave}_variacao_pp"]))
+            metrica.caption(
+                f"{dados.nome_municipio(r[f'{chave}_nm_municipio'])} "
+                f"({dados.NOMES_UF[r[f'{chave}_uf']]})"
+            )
+        media.metric(
+            "Média",
+            pontos(r["media_variacao_pp"]),
+            help="Média simples entre os municípios que viraram.",
+        )
+    sem_par = resumo_virada["lula_para_flavio"]
+    exemplo = (
+        " (como Boa Esperança do Norte, MT, instalado em 2025)" if uf_virada in (None, "MT") else ""
+    )
+    st.caption(
+        "A variação é a mudança, em pontos percentuais, da fração de Lula entre os votos dos "
+        "dois lados; a maior e a menor são em módulo. Ficam de fora os municípios que existem "
+        f"só em um dos anos: {sem_par['municipios_so_2022']} só em 2022 e "
+        f"{sem_par['municipios_so_2026']} só em 2026{exemplo}."
+    )
+    st.dataframe(
+        dados.tabela_viradas(g.viradas, uf_virada).with_columns(pl.col("d22", "d26") * 100),
+        hide_index=True,
+        width="stretch",
+        height=360,
+        column_config={
+            "nome": "Município",
+            "sentido": "Virada",
+            "aptos_2026": st.column_config.NumberColumn(
+                "Eleitores aptos (2026)", format="localized"
+            ),
+            "d22": st.column_config.ProgressColumn(
+                "Lula, 2º turno de 2022 (% dos dois lados)",
+                format="%.1f%%",
+                min_value=0,
+                max_value=100,
+                color=COR["lula"],
+            ),
+            "d26": st.column_config.ProgressColumn(
+                "Lula, 1º turno de 2026 (% dos dois lados)",
+                format="%.1f%%",
+                min_value=0,
+                max_value=100,
+                color=COR["lula"],
+            ),
+            "variacao_pp": st.column_config.NumberColumn("Variação (p.p.)", format="%+.1f"),
+        },
+    )
     rodape()
 
 # ---------------------------------------------------------------- Método

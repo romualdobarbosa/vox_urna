@@ -86,6 +86,8 @@ class Gold:
     backtest_acerto: pl.DataFrame
     estabilidade: pl.DataFrame
     referencia_externa: pl.DataFrame
+    viradas: pl.DataFrame
+    viradas_resumo: pl.DataFrame
 
 
 def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
@@ -115,6 +117,8 @@ def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
         backtest_acerto=pl.read_parquet(dir_gold / "backtest_2022_acerto.parquet"),
         estabilidade=pl.read_parquet(dir_gold / "estabilidade_transferencia.parquet"),
         referencia_externa=pl.read_parquet(dir_gold / "referencia_externa.parquet"),
+        viradas=pl.read_parquet(dir_gold / "viradas_municipio.parquet"),
+        viradas_resumo=pl.read_parquet(dir_gold / "viradas_municipio_resumo.parquet"),
     )
 
 
@@ -374,6 +378,44 @@ def tabela_referencia(referencia: pl.DataFrame) -> pl.DataFrame:
         .then(pl.col("instituto"))
         .otherwise(pl.lit("Este método"))
         .alias("rotulo")
+    )
+
+
+SENTIDOS = {"lula_para_flavio": "Lula → Flávio", "flavio_para_lula": "Flávio → Lula"}
+RESSALVA_VIRADAS = (
+    "Compara o 2º turno de 2022 com o 1º turno de 2026, só entre os dois lados. Em 2026, quem "
+    "votou em outros candidatos ainda não escolheu um lado; isto descreve o 1º turno, não é "
+    "uma projeção."
+)
+
+
+def resumo_viradas(resumo: pl.DataFrame, uf: str | None = None) -> dict[str, dict]:
+    """A linha do resumo de cada sentido, no Brasil ou numa UF."""
+    recorte = pl.col("nivel") == "brasil" if uf is None else pl.col("uf") == uf
+    return {r["sentido"]: r for r in resumo.filter(recorte).iter_rows(named=True)}
+
+
+def tabela_viradas(viradas: pl.DataFrame, uf: str | None = None) -> pl.DataFrame:
+    """Só os municípios que viraram (de uma UF, se dada), da maior variação em módulo à
+    menor, com o lado Lula de cada ano entre os dois lados."""
+    if uf is not None:
+        viradas = viradas.filter(pl.col("uf") == uf)
+    return (
+        viradas.filter(pl.col("virada").is_not_null())
+        .select(
+            (
+                pl.col("nm_municipio").map_elements(nome_municipio, return_dtype=pl.String)
+                + " ("
+                + pl.when(pl.col("uf") == UF_EXTERIOR).then(pl.lit("Exterior")).otherwise("uf")
+                + ")"
+            ).alias("nome"),
+            pl.col("virada").replace_strict(SENTIDOS).alias("sentido"),
+            "aptos_2026",
+            "d22",
+            "d26",
+            "variacao_pp",
+        )
+        .sort(pl.col("variacao_pp").abs(), "nome", descending=[True, False])
     )
 
 

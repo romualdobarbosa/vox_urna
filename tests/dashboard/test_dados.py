@@ -180,3 +180,28 @@ def test_referencia_externa_poe_o_metodo_por_ultimo():
     ref = dados.tabela_referencia(gold.referencia_externa)
     assert ref["rotulo"][-1] == "Este método"
     assert ref.filter(pl.col("fonte") == "pesquisa")["registro_tse"].null_count() == 0
+
+
+def test_viradas_mostram_so_os_municipios_que_viraram_da_maior_variacao_a_menor():
+    gold = dados.carregar()
+    viradas = dados.tabela_viradas(gold.viradas)
+    resumo = dados.resumo_viradas(gold.viradas_resumo)
+    assert set(resumo) == set(dados.SENTIDOS)
+    for sentido, rotulo in dados.SENTIDOS.items():
+        assert viradas.filter(pl.col("sentido") == rotulo).height == resumo[sentido]["viradas"]
+    assert viradas["variacao_pp"].abs().is_sorted(descending=True)
+    assert abs(viradas["variacao_pp"][0]) == pytest.approx(
+        max(abs(r["maior_variacao_pp"]) for r in resumo.values())
+    )
+    assert viradas.filter(pl.col("nome").str.ends_with("(Exterior)")).height > 0
+
+
+def test_viradas_de_uma_uf_batem_com_o_resumo_dela():
+    gold = dados.carregar()
+    resumo = dados.resumo_viradas(gold.viradas_resumo, "MG")
+    viradas = dados.tabela_viradas(gold.viradas, "MG")
+    assert viradas["nome"].str.ends_with("(MG)").all()
+    assert viradas.height == sum(r["viradas"] for r in resumo.values())
+    lula_para_flavio = viradas.filter(pl.col("sentido") == "Lula → Flávio")["variacao_pp"]
+    assert (lula_para_flavio < 0).all()
+    assert resumo["lula_para_flavio"]["menor_variacao_pp"] == pytest.approx(lula_para_flavio.max())
