@@ -72,6 +72,10 @@ _Avoid_: margem de erro, intervalo de confiança, erro amostral
 O quanto a transferência de votos de cada categoria do 1º turno se repete de uma eleição para a outra (2018 e 2022).
 _Avoid_: robustez, consistência
 
+**Virada**:
+Um município em que o lado na frente no 1º turno de 2026 não é o mesmo que venceu no 2º turno de 2022, contando só os votos dos dois lados. Descreve o 1º turno; não é uma projeção.
+_Avoid_: mudança de lado, troca, flip
+
 **Referência externa**:
 Uma estimativa da transferência de votos feita por outro método (uma pesquisa amostral publicada), usada só para comparar com o método deste projeto.
 _Avoid_: validação, gabarito, confronto
