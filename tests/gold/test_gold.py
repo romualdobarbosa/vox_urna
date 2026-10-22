@@ -74,7 +74,9 @@ def secao(ano, uf, municipio, zona, numero, aptos, contagens) -> dict:
     }
 
 
-def gravar_silver(dados: Path, ano: int, turno: int, secoes: list[dict]) -> None:
+def gravar_silver(
+    dados: Path, ano: int, turno: int, secoes: list[dict], arquivo: str = "dados.parquet"
+) -> None:
     votos = [
         (s["uf"], s["cd_municipio"], s["zona"], s["secao"], nr, *CANDIDATOS[ano][nr], v)
         for s in secoes
@@ -89,10 +91,10 @@ def gravar_silver(dados: Path, ano: int, turno: int, secoes: list[dict]) -> None
     }
     for tabela, colunas in tabelas.items():
         destino = dados / "silver" / tabela / f"ano={ano}" / f"turno={turno}"
-        destino.mkdir(parents=True)
+        destino.mkdir(parents=True, exist_ok=True)
         con = duckdb.connect()
         con.register("t", colunas)
-        con.execute(f"copy t to '{destino / 'dados.parquet'}' (format parquet)")
+        con.execute(f"copy t to '{destino / arquivo}' (format parquet)")
         con.close()
 
 
@@ -443,3 +445,75 @@ def test_pesquisa_sem_um_dos_candidatos_aborta(tmp_path, monkeypatch):
 
     with pytest.raises(GoldInconsistente, match="incompletas"):
         construir(tmp_path)
+
+
+# Municípios a mais na zona 1 do AC (códigos reais, pelo código IBGE): município → (lula,
+# flavio) no 2º turno de 2022 e no 1º turno de 2026. None é o turno em que ele não existe.
+VIRADAS = {
+    1058: ((60, 40), (30, 50)),  # Lula → Flávio, −22,5 p.p.
+    1015: ((30, 70), (45, 15)),  # Flávio → Lula, +45 p.p.
+    1074: ((50, 50), (20, 60)),  # empate em 2022: não é virada
+    1112: ((70, 30), (40, 40)),  # empate em 2026: não é virada
+    1139: ((55, 45), (45, 55)),  # Lula → Flávio, −10 p.p.
+    1104: ((40, 60), None),  # só em 2022
+}
+
+
+@pytest.fixture
+def gold_viradas(tmp_path):
+    montar_silver(tmp_path)
+    for ano, turno, i in ((2022, 2, 0), (2026, 1, 1)):
+        secoes = [
+            secao(ano, "AC", m, 1, 9000 + n, 200, [*par[i], 0, 0, 0])
+            for n, (m, par) in enumerate(VIRADAS.items())
+            if par[i] is not None
+        ]
+        gravar_silver(tmp_path, ano, turno, secoes, arquivo="viradas.parquet")
+    construir(tmp_path)
+    return tmp_path
+
+
+def test_virada_e_a_troca_do_lado_na_frente_e_o_empate_nao_conta(gold_viradas):
+    linhas = {
+        m["cd_municipio"]: m
+        for m in ler(gold_viradas, "viradas_municipio", f"cd_municipio in {tuple(VIRADAS)}")
+    }
+
+    assert {m: linha["virada"] for m, linha in linhas.items()} == {
+        1058: "lula_para_flavio",
+        1015: "flavio_para_lula",
+        1074: None,
+        1112: None,
+        1139: "lula_para_flavio",
+    }
+    assert linhas[1058]["d22"] == pytest.approx(0.6)
+    assert linhas[1058]["d26"] == pytest.approx(30 / 80)
+    assert linhas[1058]["variacao_pp"] == pytest.approx(-22.5)
+    assert linhas[1015]["variacao_pp"] == pytest.approx(45)
+    assert linhas[1058]["aptos_2026"] == 200
+
+
+def test_resumo_conta_as_viradas_por_sentido_e_os_municipios_sem_par(gold_viradas):
+    municipios = ler(gold_viradas, "viradas_municipio")
+    resumo = {r["sentido"]: r for r in ler(gold_viradas, "viradas_municipio_resumo", "uf = 'AC'")}
+    brasil = ler(gold_viradas, "viradas_municipio_resumo", "nivel = 'brasil'")
+
+    # 1120 e 1570 da base; 1007 e 1104 sem par (só em 2026 e só em 2022).
+    assert len(municipios) == 7
+    for sentido, r in resumo.items():
+        viradas = [m for m in municipios if m["virada"] == sentido]
+        variacoes = [m["variacao_pp"] for m in viradas]
+        assert (r["municipios_pareados"], r["viradas"]) == (7, len(viradas))
+        assert (r["municipios_so_2022"], r["municipios_so_2026"]) == (1, 1)
+        assert r["pct_municipios"] == pytest.approx(len(viradas) / 7)
+        assert r["pct_aptos_2026"] == pytest.approx(
+            sum(m["aptos_2026"] for m in viradas) / sum(m["aptos_2026"] for m in municipios)
+        )
+        assert r["media_variacao_pp"] == pytest.approx(np.mean(variacoes))
+        assert r["maior_variacao_pp"] == pytest.approx(max(variacoes, key=abs))
+        assert r["menor_variacao_pp"] == pytest.approx(min(variacoes, key=abs))
+    assert resumo["flavio_para_lula"]["maior_nm_municipio"] == "MUNICIPIO 1015"
+    assert [b["viradas"] for b in sorted(brasil, key=lambda b: b["sentido"])] == [
+        resumo["flavio_para_lula"]["viradas"],
+        resumo["lula_para_flavio"]["viradas"],
+    ]

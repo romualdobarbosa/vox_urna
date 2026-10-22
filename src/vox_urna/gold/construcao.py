@@ -82,6 +82,7 @@ def construir(dir_dados: Path, *, min_secoes: int = MIN_SECOES_ZONA) -> list[Tab
             _backtest(con)
             _estabilidade(con)
         _municipio_ibge(con)
+        _viradas(con)
 
         tabelas = _gravar(con, saida_tmp)
     finally:
@@ -687,6 +688,93 @@ def _municipio_ibge(con: duckdb.DuckDBPyConnection) -> None:
         raise GoldInconsistente(f"código IBGE fora da UF do município: {errados}")
 
 
+def _viradas(con: duckdb.DuckDBPyConnection) -> None:
+    """Os municípios em que o lado na frente mudou do 2º turno de 2022 ao 1º turno de 2026.
+
+    A métrica é d = lula ÷ (lula + flavio), com os votos do município somados; o empate
+    exato não é virada. Só entram os municípios (no exterior, as cidades) que votaram nos
+    dois turnos; os demais são contados no resumo.
+    """
+    con.execute(
+        f"""
+        create table _divisao_municipio as
+        select ano, uf, cd_municipio, any_value(nm_municipio) as nm_municipio,
+               sum(aptos)::bigint as aptos, sum(lula) / (sum(lula) + sum(flavio)) as d
+        from categorias
+        where (ano, turno) in (({ANO_BASE}, 2), ({ANO_ALVO}, 1))
+        group by all
+        """
+    )
+    con.execute(
+        f"""
+        create table viradas as
+        select uf, cd_municipio, b.nm_municipio, b.aptos as aptos_{ANO_ALVO},
+               a.d as d22, b.d as d26, 100 * (b.d - a.d) as variacao_pp,
+               case when a.d > 0.5 and b.d < 0.5 then 'lula_para_flavio'
+                    when a.d < 0.5 and b.d > 0.5 then 'flavio_para_lula' end as virada
+        from (select * from _divisao_municipio where ano = {ANO_BASE}) a
+        join (select * from _divisao_municipio where ano = {ANO_ALVO}) b
+            using (uf, cd_municipio)
+        """
+    )
+    # Uma linha por nível e sentido, mesmo sem viradas. A maior e a menor variação são em
+    # módulo, com o sinal mantido; a média é a dos municípios, sem ponderar.
+    con.execute(
+        f"""
+        create table viradas_resumo as
+        with sem_par as (
+            select uf,
+                   count(*) filter (where ano = {ANO_BASE}) as so_{ANO_BASE},
+                   count(*) filter (where ano = {ANO_ALVO}) as so_{ANO_ALVO}
+            from _divisao_municipio m
+            where not exists (
+                select 1 from viradas v where (v.uf, v.cd_municipio) = (m.uf, m.cd_municipio)
+            )
+            group by uf
+        ),
+        unidade as (
+            select v.*, s.sentido, v.virada is not distinct from s.sentido as virou
+            from viradas v
+            cross join (values ('lula_para_flavio'), ('flavio_para_lula')) s(sentido)
+        ),
+        resumo as (
+            select if(grouping(uf) = 1, 'brasil', 'uf') as nivel, uf, sentido,
+                   count(*) as municipios_pareados,
+                   count(*) filter (where virou) as viradas,
+                   count(*) filter (where virou) / count(*) as pct_municipios,
+                   coalesce(sum(aptos_{ANO_ALVO}) filter (where virou), 0)
+                       / sum(aptos_{ANO_ALVO}) as pct_aptos_{ANO_ALVO},
+                   avg(variacao_pp) filter (where virou) as media_variacao_pp,
+                   arg_max(variacao_pp, abs(variacao_pp)) filter (where virou)
+                       as maior_variacao_pp,
+                   arg_max(nm_municipio, abs(variacao_pp)) filter (where virou)
+                       as maior_nm_municipio,
+                   arg_max(uf, abs(variacao_pp)) filter (where virou) as maior_uf,
+                   arg_min(variacao_pp, abs(variacao_pp)) filter (where virou)
+                       as menor_variacao_pp,
+                   arg_min(nm_municipio, abs(variacao_pp)) filter (where virou)
+                       as menor_nm_municipio,
+                   arg_min(uf, abs(variacao_pp)) filter (where virou) as menor_uf
+            from unidade
+            group by grouping sets ((sentido), (sentido, uf))
+        ),
+        sem_par_nivel as (
+            select 'uf' as nivel, * from sem_par
+            union all
+            select 'brasil', null, sum(so_{ANO_BASE})::bigint, sum(so_{ANO_ALVO})::bigint
+            from sem_par
+        )
+        select r.nivel, r.uf, r.sentido, r.municipios_pareados,
+               coalesce(s.so_{ANO_BASE}, 0) as municipios_so_{ANO_BASE},
+               coalesce(s.so_{ANO_ALVO}, 0) as municipios_so_{ANO_ALVO},
+               r.* exclude (nivel, uf, sentido, municipios_pareados)
+        from resumo r
+        left join sem_par_nivel s
+            on s.nivel = r.nivel and s.uf is not distinct from r.uf
+        """
+    )
+
+
 def _gravar(con: duckdb.DuckDBPyConnection, saida: Path) -> list[Tabela]:
     fracoes = ", ".join(f"{k} / aptos as {k}" for k in K)
     consultas = {
@@ -700,6 +788,8 @@ def _gravar(con: duckdb.DuckDBPyConnection, saida: Path) -> list[Tabela]:
         "taxa_match": "select * from taxa_match",
         "municipio_ibge": "select * from municipio_ibge",
         "referencia_externa": "select * from referencia_externa",
+        "viradas_municipio": "select * from viradas",
+        "viradas_municipio_resumo": "select * from viradas_resumo",
     }
     if con.execute("select 1 from duckdb_tables() where table_name = 'backtest'").fetchall():
         consultas |= {
