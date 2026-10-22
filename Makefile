@@ -1,4 +1,4 @@
-.PHONY: all bronze silver gold test lint dashboard
+.PHONY: all bronze silver gold test lint dashboard figuras
 
 all: gold
 
@@ -20,3 +20,6 @@ lint:
 
 dashboard:
 	uv run --group dashboard streamlit run app/streamlit_app.py
+
+figuras:
+	uv run --with kaleido python app/figuras.py
