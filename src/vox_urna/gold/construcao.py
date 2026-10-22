@@ -84,6 +84,7 @@ def construir(dir_dados: Path, *, min_secoes: int = MIN_SECOES_ZONA) -> list[Tab
             _estabilidade(con)
         _municipio_ibge(con)
         _viradas(con)
+        _primeiro_turno(con)
 
         tabelas = _gravar(con, saida_tmp)
     finally:
@@ -783,6 +784,22 @@ def _viradas(con: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def _primeiro_turno(con: duckdb.DuckDBPyConnection) -> None:
+    """Os votos do 1º turno de ANO_ALVO por UF e no Brasil, que entra com o exterior, como no
+    resultado oficial."""
+    con.execute(
+        f"""
+        create table primeiro_turno as
+        select case when grouping(uf) = 1 then 'brasil' else 'uf' end as nivel, uf,
+               sum(aptos)::bigint as aptos,
+               {", ".join(f"sum({k})::bigint as {k}" for k in K)}
+        from categorias
+        where ano = {ANO_ALVO} and turno = 1
+        group by grouping sets ((uf), ())
+        """
+    )
+
+
 def _gravar(con: duckdb.DuckDBPyConnection, saida: Path) -> list[Tabela]:
     fracoes = ", ".join(f"{k} / aptos as {k}" for k in K)
     consultas = {
@@ -798,6 +815,7 @@ def _gravar(con: duckdb.DuckDBPyConnection, saida: Path) -> list[Tabela]:
         "referencia_externa": "select * from referencia_externa",
         "viradas_municipio": "select * from viradas",
         "viradas_municipio_resumo": "select * from viradas_resumo",
+        f"primeiro_turno_{ANO_ALVO}": "select * from primeiro_turno",
     }
     if con.execute("select 1 from duckdb_tables() where table_name = 'backtest'").fetchall():
         consultas |= {

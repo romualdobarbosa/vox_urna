@@ -541,3 +541,17 @@ def test_brasil_do_resumo_deixa_o_exterior_de_fora(gold_viradas):
     assert (exterior["municipios_pareados"], exterior["viradas"]) == (1, 1)
     assert (exterior["municipios_so_2022"], exterior["municipios_so_2026"]) == (1, 0)
     assert exterior["maior_variacao_pp"] == pytest.approx(80)
+
+
+def test_primeiro_turno_soma_as_secoes_por_uf_e_no_brasil_com_o_exterior(gold_viradas):
+    secoes = ler(gold_viradas, "categorias_secao", "ano = 2026 and turno = 1")
+    linhas = ler(gold_viradas, "primeiro_turno_2026")
+    [brasil] = [r for r in linhas if r["nivel"] == "brasil"]
+    por_uf = {r["uf"]: r for r in linhas if r["nivel"] == "uf"}
+
+    assert brasil["uf"] is None
+    assert set(por_uf) == {s["uf"] for s in secoes}
+    for k in ("lula", "flavio", "outros", "branco", "nulo", "abstencao"):
+        assert brasil[k] == round(sum(s[k] * s["aptos"] for s in secoes))
+        assert brasil[k] == sum(r[k] for r in por_uf.values())
+    assert brasil["aptos"] == sum(s["aptos"] for s in secoes)
