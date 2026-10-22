@@ -114,6 +114,11 @@ def pontos(valor: float) -> str:
     return f"{valor:+.1f}".replace(".", ",") + " p.p."
 
 
+def pct_pequeno(fracao: float) -> str:
+    """Como `dados.pct`, com duas casas abaixo de 0,1% para um caso só não virar "0,0%"."""
+    return dados.pct(fracao, 2 if 0 < fracao < 0.001 else 1)
+
+
 def texto_backtest() -> str:
     """A linha do erro do backtest sob a manchete, com sinal (ADR 0004)."""
     sentido = "a mais" if backtest.erro_pp > 0 else "a menos"
@@ -404,16 +409,24 @@ with aba_dados:
     st.markdown(
         "Os municípios em que o lado na frente mudou: quem liderava entre Lula e Jair "
         "Bolsonaro no 2º turno de 2022 e quem lidera entre Lula e Flávio Bolsonaro no 1º turno "
-        "de 2026. No exterior, cada cidade com consulado conta como um município. Não depende "
-        "do cenário."
+        "de 2026. O Brasil não inclui o exterior, que fica à parte no seletor: lá, cada cidade "
+        "com consulado conta como um município. Não depende do cenário."
     )
     st.info(dados.RESSALVA_VIRADAS)
     uf_virada = st.selectbox(
         "Abrangência das viradas",
-        [None, *sorted(set(g.viradas_resumo["uf"].drop_nulls()))],
-        format_func=lambda uf: "Brasil" if uf is None else dados.NOMES_UF[uf],
+        # O exterior por último, como nas outras tabelas por UF.
+        [
+            None,
+            *sorted(
+                set(g.viradas_resumo["uf"].drop_nulls()),
+                key=lambda uf: (uf == dados.UF_EXTERIOR, uf),
+            ),
+        ],
+        format_func=lambda uf: "Brasil (sem o exterior)" if uf is None else dados.NOMES_UF[uf],
     )
     resumo_virada = dados.resumo_viradas(g.viradas_resumo, uf_virada)
+    unidade = "cidade" if uf_virada == dados.UF_EXTERIOR else "município"
     # A cor é a do lado que passou a ficar na frente.
     cores_virada = {"lula_para_flavio": COR["flavio"], "flavio_para_lula": COR["lula"]}
     for coluna, (sentido, rotulo) in zip(st.columns(2), dados.SENTIDOS.items(), strict=True):
@@ -423,10 +436,10 @@ with aba_dados:
             "margin-bottom: 12px'>"
             f"<div style='font-size: 1.1rem'>{rotulo}</div>"
             f"<div style='font-size: 2.4rem; font-weight: 700; color: {cores_virada[sentido]}'>"
-            f"{dados.inteiro(r['viradas'])} município{'s' if r['viradas'] != 1 else ''}</div>"
-            f"<div style='opacity: 0.7'>{dados.pct(r['pct_municipios'])} dos "
-            f"{dados.inteiro(r['municipios_pareados'])} municípios comparáveis · "
-            f"{dados.pct(r['pct_aptos_2026'])} dos eleitores aptos de 2026</div></div>",
+            f"{dados.inteiro(r['viradas'])} {unidade}{'s' if r['viradas'] != 1 else ''}</div>"
+            f"<div style='opacity: 0.7'>{pct_pequeno(r['pct_municipios'])} de "
+            f"{dados.inteiro(r['municipios_pareados'])} {unidade}s comparáveis · "
+            f"{pct_pequeno(r['pct_aptos_2026'])} dos eleitores aptos de 2026</div></div>",
             unsafe_allow_html=True,
         )
         if not r["viradas"]:
@@ -437,14 +450,14 @@ with aba_dados:
             (menor, "Menor variação", "menor"),
         ):
             metrica.metric(rotulo_metrica, pontos(r[f"{chave}_variacao_pp"]))
-            metrica.caption(
-                f"{dados.nome_municipio(r[f'{chave}_nm_municipio'])} "
-                f"({dados.NOMES_UF[r[f'{chave}_uf']]})"
-            )
+            nome = dados.nome_municipio(r[f"{chave}_nm_municipio"])
+            if r[f"{chave}_uf"] != dados.UF_EXTERIOR:
+                nome += f" ({dados.NOMES_UF[r[f'{chave}_uf']]})"
+            metrica.caption(nome)
         media.metric(
             "Média",
             pontos(r["media_variacao_pp"]),
-            help="Média simples entre os municípios que viraram.",
+            help=f"Média simples entre os {unidade}s que viraram.",
         )
     sem_par = resumo_virada["lula_para_flavio"]
     exemplo = (
@@ -452,7 +465,7 @@ with aba_dados:
     )
     st.caption(
         "A variação é a mudança, em pontos percentuais, da fração de Lula entre os votos dos "
-        "dois lados; a maior e a menor são em módulo. Ficam de fora os municípios que existem "
+        f"dois lados; a maior e a menor são em módulo. Ficam de fora os {unidade}s que existem "
         f"só em um dos anos: {sem_par['municipios_so_2022']} só em 2022 e "
         f"{sem_par['municipios_so_2026']} só em 2026{exemplo}."
     )
@@ -462,7 +475,7 @@ with aba_dados:
         width="stretch",
         height=360,
         column_config={
-            "nome": "Município",
+            "nome": unidade.capitalize(),
             "sentido": "Virada",
             "aptos_2026": st.column_config.NumberColumn(
                 "Eleitores aptos (2026)", format="localized"

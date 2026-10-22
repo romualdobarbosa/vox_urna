@@ -15,6 +15,7 @@ MIN_SECOES_ZONA = 10
 ANO_ALVO = 2026
 ANO_BASE = 2022
 ANO_SENSIBILIDADE = 2018
+UF_EXTERIOR = "ZZ"
 
 # Correspondência entre os códigos de município do TSE e do IBGE, copiada de
 # https://github.com/betafcc/Municipios-Brasileiros-TSE (municipios_brasileiros_tse.csv,
@@ -693,7 +694,8 @@ def _viradas(con: duckdb.DuckDBPyConnection) -> None:
 
     A métrica é d = lula ÷ (lula + flavio), com os votos do município somados; o empate
     exato não é virada. Só entram os municípios (no exterior, as cidades) que votaram nos
-    dois turnos; os demais são contados no resumo.
+    dois turnos; os demais são contados no resumo. O Brasil do resumo deixa o exterior de
+    fora: as cidades de consulado, com poucos votos, dominariam os extremos.
     """
     con.execute(
         f"""
@@ -717,8 +719,9 @@ def _viradas(con: duckdb.DuckDBPyConnection) -> None:
             using (uf, cd_municipio)
         """
     )
-    # Uma linha por nível e sentido, mesmo sem viradas. A maior e a menor variação são em
-    # módulo, com o sinal mantido; a média é a dos municípios, sem ponderar.
+    # Uma linha por nível e sentido, mesmo sem viradas; o exterior só tem a linha de UF. A
+    # maior e a menor variação são em módulo, com o sinal mantido; a média é a dos
+    # municípios, sem ponderar.
     con.execute(
         f"""
         create table viradas_resumo as
@@ -732,13 +735,18 @@ def _viradas(con: duckdb.DuckDBPyConnection) -> None:
             )
             group by uf
         ),
+        por_nivel as (
+            select 'uf' as nivel, uf as uf_nivel, * from viradas
+            union all
+            select 'brasil', null, * from viradas where uf <> '{UF_EXTERIOR}'
+        ),
         unidade as (
             select v.*, s.sentido, v.virada is not distinct from s.sentido as virou
-            from viradas v
+            from por_nivel v
             cross join (values ('lula_para_flavio'), ('flavio_para_lula')) s(sentido)
         ),
         resumo as (
-            select if(grouping(uf) = 1, 'brasil', 'uf') as nivel, uf, sentido,
+            select nivel, uf_nivel as uf, sentido,
                    count(*) as municipios_pareados,
                    count(*) filter (where virou) as viradas,
                    count(*) filter (where virou) / count(*) as pct_municipios,
@@ -756,13 +764,13 @@ def _viradas(con: duckdb.DuckDBPyConnection) -> None:
                        as menor_nm_municipio,
                    arg_min(uf, abs(variacao_pp)) filter (where virou) as menor_uf
             from unidade
-            group by grouping sets ((sentido), (sentido, uf))
+            group by nivel, uf_nivel, sentido
         ),
         sem_par_nivel as (
             select 'uf' as nivel, * from sem_par
             union all
             select 'brasil', null, sum(so_{ANO_BASE})::bigint, sum(so_{ANO_ALVO})::bigint
-            from sem_par
+            from sem_par where uf <> '{UF_EXTERIOR}'
         )
         select r.nivel, r.uf, r.sentido, r.municipios_pareados,
                coalesce(s.so_{ANO_BASE}, 0) as municipios_so_{ANO_BASE},

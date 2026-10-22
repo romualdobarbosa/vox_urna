@@ -459,15 +459,23 @@ VIRADAS = {
 }
 
 
+# Uma cidade do exterior que virou com folga, para conferir que ela fica fora do Brasil, e
+# outra que só votou em 2022 (os dois turnos, para o exterior ter β na ligação de 2026).
+VIRADA_EXTERIOR = (99001, (10, 90), (45, 5))  # Flávio → Lula, +80 p.p.
+SO_2022_EXTERIOR = ("ZZ", 29874, 1, 12)
+
+
 @pytest.fixture
 def gold_viradas(tmp_path):
-    montar_silver(tmp_path)
+    montar_silver(tmp_path, geografia={2022: [*SECOES_REF, SO_2022_EXTERIOR]})
+    exterior, *pares = VIRADA_EXTERIOR
     for ano, turno, i in ((2022, 2, 0), (2026, 1, 1)):
         secoes = [
             secao(ano, "AC", m, 1, 9000 + n, 200, [*par[i], 0, 0, 0])
             for n, (m, par) in enumerate(VIRADAS.items())
             if par[i] is not None
         ]
+        secoes.append(secao(ano, "ZZ", exterior, 1, 9100, 200, [*pares[i], 0, 0, 0]))
         gravar_silver(tmp_path, ano, turno, secoes, arquivo="viradas.parquet")
     construir(tmp_path)
     return tmp_path
@@ -491,12 +499,14 @@ def test_virada_e_a_troca_do_lado_na_frente_e_o_empate_nao_conta(gold_viradas):
     assert linhas[1058]["variacao_pp"] == pytest.approx(-22.5)
     assert linhas[1015]["variacao_pp"] == pytest.approx(45)
     assert linhas[1058]["aptos_2026"] == 200
+    # A tabela por município mantém o exterior.
+    [exterior] = ler(gold_viradas, "viradas_municipio", "uf = 'ZZ'")
+    assert (exterior["virada"], exterior["variacao_pp"]) == ("flavio_para_lula", pytest.approx(80))
 
 
 def test_resumo_conta_as_viradas_por_sentido_e_os_municipios_sem_par(gold_viradas):
-    municipios = ler(gold_viradas, "viradas_municipio")
+    municipios = ler(gold_viradas, "viradas_municipio", "uf = 'AC'")
     resumo = {r["sentido"]: r for r in ler(gold_viradas, "viradas_municipio_resumo", "uf = 'AC'")}
-    brasil = ler(gold_viradas, "viradas_municipio_resumo", "nivel = 'brasil'")
 
     # 1120 e 1570 da base; 1007 e 1104 sem par (só em 2026 e só em 2022).
     assert len(municipios) == 7
@@ -513,7 +523,21 @@ def test_resumo_conta_as_viradas_por_sentido_e_os_municipios_sem_par(gold_virada
         assert r["maior_variacao_pp"] == pytest.approx(max(variacoes, key=abs))
         assert r["menor_variacao_pp"] == pytest.approx(min(variacoes, key=abs))
     assert resumo["flavio_para_lula"]["maior_nm_municipio"] == "MUNICIPIO 1015"
-    assert [b["viradas"] for b in sorted(brasil, key=lambda b: b["sentido"])] == [
-        resumo["flavio_para_lula"]["viradas"],
-        resumo["lula_para_flavio"]["viradas"],
-    ]
+
+
+def test_brasil_do_resumo_deixa_o_exterior_de_fora(gold_viradas):
+    resumo = ler(gold_viradas, "viradas_municipio_resumo")
+    brasil = {r["sentido"]: r for r in resumo if r["nivel"] == "brasil"}
+    ac = {r["sentido"]: r for r in resumo if r["uf"] == "AC"}
+    [exterior] = [r for r in resumo if r["uf"] == "ZZ" and r["sentido"] == "flavio_para_lula"]
+
+    # Sem o exterior, o Brasil é o AC inteiro, com a cidade de +80 p.p. fora dos extremos.
+    for sentido, r in brasil.items():
+        assert r["uf"] is None
+        assert {c: r[c] for c in r if c not in ("nivel", "uf")} == {
+            c: ac[sentido][c] for c in r if c not in ("nivel", "uf")
+        }
+    assert brasil["flavio_para_lula"]["maior_nm_municipio"] == "MUNICIPIO 1015"
+    assert (exterior["municipios_pareados"], exterior["viradas"]) == (1, 1)
+    assert (exterior["municipios_so_2022"], exterior["municipios_so_2026"]) == (1, 0)
+    assert exterior["maior_variacao_pp"] == pytest.approx(80)

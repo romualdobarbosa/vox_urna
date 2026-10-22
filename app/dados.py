@@ -390,25 +390,23 @@ RESSALVA_VIRADAS = (
 
 
 def resumo_viradas(resumo: pl.DataFrame, uf: str | None = None) -> dict[str, dict]:
-    """A linha do resumo de cada sentido, no Brasil ou numa UF."""
+    """A linha do resumo de cada sentido, no Brasil (sem o exterior) ou numa UF."""
     recorte = pl.col("nivel") == "brasil" if uf is None else pl.col("uf") == uf
     return {r["sentido"]: r for r in resumo.filter(recorte).iter_rows(named=True)}
 
 
 def tabela_viradas(viradas: pl.DataFrame, uf: str | None = None) -> pl.DataFrame:
-    """Só os municípios que viraram (de uma UF, se dada), da maior variação em módulo à
-    menor, com o lado Lula de cada ano entre os dois lados."""
-    if uf is not None:
-        viradas = viradas.filter(pl.col("uf") == uf)
+    """Só os municípios que viraram, no Brasil (sem o exterior, como no resumo) ou numa UF,
+    da maior variação em módulo à menor. No exterior, o nome é o da cidade, sem a UF."""
+    recorte = pl.col("uf") != UF_EXTERIOR if uf is None else pl.col("uf") == uf
+    nome = pl.col("nm_municipio").map_elements(nome_municipio, return_dtype=pl.String)
     return (
-        viradas.filter(pl.col("virada").is_not_null())
+        viradas.filter(recorte & pl.col("virada").is_not_null())
         .select(
-            (
-                pl.col("nm_municipio").map_elements(nome_municipio, return_dtype=pl.String)
-                + " ("
-                + pl.when(pl.col("uf") == UF_EXTERIOR).then(pl.lit("Exterior")).otherwise("uf")
-                + ")"
-            ).alias("nome"),
+            pl.when(pl.col("uf") == UF_EXTERIOR)
+            .then(nome)
+            .otherwise(nome + " (" + pl.col("uf") + ")")
+            .alias("nome"),
             pl.col("virada").replace_strict(SENTIDOS).alias("sentido"),
             "aptos_2026",
             "d22",

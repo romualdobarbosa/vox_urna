@@ -193,7 +193,17 @@ def test_viradas_mostram_so_os_municipios_que_viraram_da_maior_variacao_a_menor(
     assert abs(viradas["variacao_pp"][0]) == pytest.approx(
         max(abs(r["maior_variacao_pp"]) for r in resumo.values())
     )
-    assert viradas.filter(pl.col("nome").str.ends_with("(Exterior)")).height > 0
+    # O Brasil deixa o exterior de fora: todo nome traz a UF entre parênteses.
+    assert viradas["nome"].str.contains(r"\([A-Z]{2}\)$").all()
+    assert resumo["lula_para_flavio"]["maior_uf"] != dados.UF_EXTERIOR
+
+
+def test_exterior_das_viradas_fica_a_parte_com_o_nome_da_cidade():
+    gold = dados.carregar()
+    resumo = dados.resumo_viradas(gold.viradas_resumo, dados.UF_EXTERIOR)
+    exterior = dados.tabela_viradas(gold.viradas, dados.UF_EXTERIOR)
+    assert exterior.height == sum(r["viradas"] for r in resumo.values()) > 0
+    assert not exterior["nome"].str.contains(r"\(").any()
 
 
 def test_viradas_de_uma_uf_batem_com_o_resumo_dela():
