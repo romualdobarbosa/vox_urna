@@ -5,9 +5,16 @@ from pathlib import Path
 
 from vox_urna.bronze.ingest import ingerir
 from vox_urna.bronze.manifest import Status
+from vox_urna.bronze.resultados import ANOS as ANOS_RESULTADOS
+from vox_urna.bronze.resultados import ingerir_resultados
 from vox_urna.gold.construcao import GoldInconsistente
 from vox_urna.gold.construcao import construir as construir_gold
 from vox_urna.silver.construcao import RejeicaoExcessiva, construir
+from vox_urna.silver.resultados import (
+    ResultadoIncompleto,
+    ResultadoInconsistente,
+    construir_resultados,
+)
 
 ANOS = (2018, 2022, 2026)
 
@@ -25,6 +32,20 @@ def main(argv: list[str] | None = None) -> int:
         "--force", action="store_true", help="baixa de novo mesmo o que já foi baixado"
     )
     bronze.add_argument("--workers", type=int, default=4)
+
+    resultados = sub.add_parser(
+        "bronze-resultados",
+        help="baixa os resultados divulgados pelo TSE (JSON por Brasil, UF e município)",
+    )
+    resultados.add_argument(
+        "--ano", type=int, nargs="+", default=list(ANOS_RESULTADOS), choices=ANOS_RESULTADOS
+    )
+    resultados.add_argument("--turno", type=int, nargs="+", choices=(1, 2))
+    resultados.add_argument("--uf", nargs="+", help="ex: AC ZZ (padrão: todas e o Brasil)")
+    resultados.add_argument(
+        "--force", action="store_true", help="baixa de novo mesmo o que já foi baixado"
+    )
+    resultados.add_argument("--workers", type=int, default=4)
 
     silver = sub.add_parser("silver", help="filtra Presidente e gera as tabelas por seção")
     silver.add_argument(
@@ -45,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.camada == "bronze":
         return _bronze(args)
+    if args.camada == "bronze-resultados":
+        return _bronze_resultados(args)
     if args.camada == "silver":
         return _silver(args)
     return _gold(args)
@@ -63,6 +86,20 @@ def _bronze(args: argparse.Namespace) -> int:
     return 1 if resumo[Status.CORRUPTED] or resumo[Status.FAILED] else 0
 
 
+def _bronze_resultados(args: argparse.Namespace) -> int:
+    resumo = ingerir_resultados(
+        args.dados / "bronze" / "resultados",
+        args.ano,
+        turnos=args.turno,
+        ufs=args.uf,
+        force=args.force,
+        workers=args.workers,
+    )
+    print(", ".join(f"{desfecho}: {n}" for desfecho, n in sorted(resumo.items())))
+    falhas = (Status.CORRUPTED, Status.FAILED, Status.INCOMPLETE)
+    return 1 if any(resumo[status] for status in falhas) else 0
+
+
 def _silver(args: argparse.Namespace) -> int:
     try:
         resultados = construir(args.dados, force=args.force, workers=args.workers)
@@ -72,6 +109,15 @@ def _silver(args: argparse.Namespace) -> int:
     for r in resultados:
         estado = "pulado" if r.pulado else "construído"
         print(f"{r.ano}/{r.turno}: {estado}, {r.secoes} seções, {r.rejeitadas} em quarentena")
+
+    try:
+        divulgados = construir_resultados(args.dados, force=args.force)
+    except (ResultadoIncompleto, ResultadoInconsistente) as erro:
+        print(f"silver dos resultados abortado: {erro}", file=sys.stderr)
+        return 1
+    for r in divulgados:
+        estado = "pulado" if r.pulado else "construído"
+        print(f"resultados {r.ano}/{r.turno}: {estado}, {r.municipios} municípios")
     return 0
 
 

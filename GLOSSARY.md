@@ -38,6 +38,10 @@ _Avoid_: ausentes, ausência, faltosos
 A contagem oficial de votos de uma seção num turno, publicada pelo TSE.
 _Avoid_: resultado da urna, apuração
 
+**Resultado divulgado**:
+A totalização oficial que o TSE publica no site de resultados na noite da eleição, por Brasil, UF e município. Não chega à seção nem à zona. É uma fonte independente do BU para conferir os mesmos votos.
+_Avoid_: resultado oficial (sozinho), apuração, parcial
+
 ## Método
 
 **Taxa de match**:

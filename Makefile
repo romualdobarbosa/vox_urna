@@ -1,11 +1,14 @@
-.PHONY: all bronze silver gold test lint dashboard figuras
+.PHONY: all bronze bronze-resultados silver gold test lint dashboard figuras
 
 all: gold
 
 bronze:
 	uv run vox-urna bronze
 
-silver: bronze
+bronze-resultados:
+	uv run vox-urna bronze-resultados
+
+silver: bronze bronze-resultados
 	uv run vox-urna silver
 
 gold: silver

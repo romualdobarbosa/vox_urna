@@ -17,6 +17,7 @@ Vocabulário: [GLOSSARY.md](GLOSSARY.md). Decisões de arquitetura: [docs/adr/](
 - 2018: 1º e 2º turno, por seção. Servem para calibrar o cenário de sensibilidade de "outros" e para o backtest.
 - 2022: 1º e 2º turno, por seção. Fonte do β do cenário base.
 - 2026: 1º turno por seção. O 2º turno é ingerido depois de 25/10, para o confronto.
+- 2026, os dois turnos, também pelos resultados divulgados (JSON por Brasil, UF e município). É uma segunda fonte, que sai na noite da eleição, dias antes dos BUs do CKAN.
 - Exterior incluído no modelo e nos totais, como uma zona a mais.
 - Backtest 2018 → 2022, estabilidade da transferência entre 2018 e 2022 e referência externa (pesquisas de 2022), descritos em "Avaliação do método".
 - MVP publicado até 23/10/26.
@@ -42,7 +43,13 @@ Diferenças por ano, que o silver normaliza:
 - O uso de aspas, o fim de linha (CRLF/LF) e a forma do partido nulo (`#NULO#` em 2018, `-1` em 2022) variam.
 - O exterior é `ZZ` em 2022 e 2026 e "Exterior" em 2018. O "município" é a cidade do consulado (cerca de 145), e há uma única zona.
 
-Plano B (não usado, mas documentado): os JSONs de `resultados.tse.jus.br`. Referências: https://github.com/doccaz/urnas-br e a especificação EA17 do TSE.
+**Resultados divulgados** (`resultados.tse.jus.br`), a fonte do site de resultados do TSE. Um JSON por abrangência, publicado na noite da eleição:
+- `comum/config/ele-c.json`: as eleições do ciclo e os seus códigos (Presidente 2026: `6257` no 1º turno, `6258` no 2º). A API só mantém o ciclo corrente; 2018 e 2022 já saíram dela.
+- `ele2026/{eleicao}/config/mun-e{eleicao}-cm.json`: a lista de municípios de cada UF (5.571 no Brasil e 186 cidades no exterior), com o código do TSE, o do IBGE e as zonas.
+- `ele2026/{eleicao}/dados/{uf}/{uf}{municipio}-c0001-e{eleicao}-u.json`, e os equivalentes de UF (`{uf}-c0001-…`) e Brasil (`br-c0001-…`): eleitorado, aptos das seções apuradas, comparecimento, abstenção, válidos, brancos, nulos, nulos técnicos e os votos de cada candidato. Não há arquivo por zona nem por seção.
+- Diferenças em relação ao BU: o JSON separa os **nulos técnicos** (votos em candidato com registro indeferido, que o TSE soma aos nulos e o BU conta como nominais), e o eleitorado inclui as seções não instaladas.
+
+Também existe o arquivo de cada urna (`arquivo-urna/`), com o BU binário em ASN.1 (especificação EA17, decodificado pelo https://github.com/doccaz/urnas-br). Não é usado: seriam cerca de 1 milhão de requisições para adiantar em um ou dois dias o que o CKAN publica em CSV.
 
 ## Arquitetura (medallion)
 
@@ -57,6 +64,15 @@ Execução por CLI, um comando por camada (`vox-urna bronze --ano 2026 --turno 1
 - Retry com backoff.
 - O arquivo bruto é guardado como veio.
 
+### Bronze: resultados divulgados
+`vox-urna bronze-resultados` (`make bronze-resultados`), a segunda ingestão, com os mesmos princípios e outra fonte.
+- Resolve o código da eleição de Presidente de cada turno na config do TSE, baixa a lista de municípios e monta, a partir dela, a URL do Brasil, de cada UF e de cada município (cerca de 5.800 arquivos por turno).
+- Um pool de 4 threads baixa os arquivos. Os workers só baixam e validam; quem grava o manifest é a thread principal, a cada 500 arquivos e no fim.
+- Manifest próprio (`data/bronze/resultados/manifest.csv`): `url, ano, turno, abrangencia, uf, cd_municipio, caminho, sha512, bytes, gerado_em, downloaded_at, status`. O `gerado_em` é a data e a hora em que o TSE gerou o arquivo.
+- Arquivos em `data/bronze/resultados/ano=AAAA/turno=N/`, com o nome original.
+- **Integridade:** não há `.sha512` oficial. O sha512 é calculado na chegada, e o JSON precisa ser da eleição, do turno e da abrangência pedidos e ter o cargo de Presidente; se não, fica `corrupted`. Se a totalização daquele arquivo ainda não for final (`tf`), fica `incomplete`. Nos dois casos o arquivo não vai para o disco e é baixado de novo no próximo run.
+- Idempotência, retry e `--force` como no bronze do CKAN. `--uf` baixa só as UFs pedidas, sem o Brasil.
+
 ### Silver
 - Lê cada zip **em streaming** (o 1º turno tem cerca de 32 GB descomprimido por eleição, com todos os cargos), mantém só as linhas de Presidente (`CD_CARGO_PERGUNTA = 1`; os textos mudam de capitalização entre anos), normaliza o cabeçalho por ano e converte para UTF-8. O DuckDB monta as tabelas. Tudo roda em cerca de 2 min.
 - Grava Parquet tipado em `data/silver/{tabela}/ano=AAAA/turno=N/`:
@@ -66,6 +82,13 @@ Execução por CLI, um comando por camada (`vox-urna bronze --ano 2026 --turno 1
 - **Invariantes:** urna apurada (o TSE anula algumas urnas, cujos votos não entram na totalização); soma dos votos = comparecimento; aptos = comparecimento + abstenção; nenhuma seção duplicada; aptos e comparecimento constantes dentro da seção. Uma seção que viola uma invariante vai para quarentena, e o build só falha se as rejeitadas passarem de 0,1% ([ADR 0001](docs/adr/0001-quarentena-de-secoes-invalidas.md)).
 - **Idempotência:** `data/silver/_construcao.json` guarda os sha512 do bronze usados em cada turno. O turno só é reconstruído se o bronze mudar ou com `--force`.
 - **Conferência com o resultado oficial:** os totais nacionais batem voto a voto (ex: 2022 2T, Lula 60.345.999 × Jair 58.206.354). Nos dados reais só caíram em quarentena urnas anuladas: 4 + 1 seções em 2018, 4 + 1 em 2022 e nenhuma em 2026.
+
+### Silver: resultados divulgados
+O mesmo `vox-urna silver` constrói, a partir do bronze dos resultados, em `data/silver/{tabela}/ano=AAAA/turno=N/`:
+- `resultado`: uma linha por Brasil, UF e município (`nivel`), com `uf, cd_municipio, nm_municipio, cd_ibge, eleitorado, aptos, comparecimento, abstencao, validos, branco, nulo, nulo_tecnico, anulados, gerado_em`. O Brasil tem `uf` nula; o exterior é a UF `ZZ`, sem código do IBGE.
+- `resultado_votos`: os votos de cada candidato em cada linha de `resultado` (`nr_votavel, nm_votavel, sg_partido, votos`), com o nome de urna, como no BU.
+- **Sem quarentena:** são totais já consolidados pelo TSE, então o build falha se faltar algum arquivo da lista de municípios, se uma conta não fechar dentro do arquivo (aptos = comparecimento + abstenção; comparecimento = válidos + brancos + nulos + nulos técnicos + anulados; válidos = soma dos candidatos) ou se os municípios não somarem a UF e as UFs não somarem o Brasil, em cada total e em cada candidato.
+- Idempotência pelo mesmo `_construcao.json`, com a chave `resultados-AAAA-N`.
 
 ### Gold
 Arquivos em `data/gold/{tabela}.parquet`, reconstruídos inteiros a cada `vox-urna gold` (cerca de 2 min). As tabelas por seção (`categorias_secao`, `painel_secao_*`, cerca de 100 MB) ficam fora do git; as demais são versionadas para o dashboard.
