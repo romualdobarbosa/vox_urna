@@ -16,6 +16,15 @@ ANO_ALVO = 2026
 ANO_BASE = 2022
 ANO_SENSIBILIDADE = 2018
 UF_EXTERIOR = "ZZ"
+# Faixas de tamanho do município pelos aptos do 2º turno de ANO_ALVO: (limite superior
+# inclusivo, nome). A última não tem limite.
+FAIXAS_APTOS = [
+    (10_000, "ate_10mil"),
+    (50_000, "10mil_a_50mil"),
+    (200_000, "50mil_a_200mil"),
+    (1_000_000, "200mil_a_1mi"),
+    (None, "acima_de_1mi"),
+]
 
 # Correspondência entre os códigos de município do TSE e do IBGE, copiada de
 # https://github.com/betafcc/Municipios-Brasileiros-TSE (municipios_brasileiros_tse.csv,
@@ -65,9 +74,8 @@ def construir(dir_dados: Path, *, min_secoes: int = MIN_SECOES_ZONA) -> list[Tab
         turnos = set(con.execute("select distinct ano, turno from secao").fetchall())
         _carregar_lados(con, {ano for ano, _ in turnos})
         _categorias(con)
-        anos_painel = sorted(
-            ano for ano, turno in turnos if turno == 1 and (ano, 2) in turnos and ano != ANO_ALVO
-        )
+        # O painel de ANO_ALVO só existe depois do 2º turno: ele dá o β real, para o confronto.
+        anos_painel = sorted(ano for ano, turno in turnos if turno == 1 and (ano, 2) in turnos)
         if (ANO_ALVO, 1) not in turnos or ANO_BASE not in anos_painel:
             raise GoldInconsistente(
                 f"a projeção precisa do 1º turno de {ANO_ALVO} e dos dois turnos de {ANO_BASE}"
@@ -85,6 +93,12 @@ def construir(dir_dados: Path, *, min_secoes: int = MIN_SECOES_ZONA) -> list[Tab
         _municipio_ibge(con)
         _viradas(con)
         _primeiro_turno(con)
+        if ANO_ALVO in anos_painel:
+            _confronto(con)
+            _comparacao_transferencia(con)
+            _votos_municipio(con)
+            _fluxo(con)
+            _resumo_2026(con)
 
         tabelas = _gravar(con, saida_tmp)
     finally:
@@ -571,6 +585,20 @@ def _backtest(con: duckdb.DuckDBPyConnection) -> None:
         """
     )
 
+    _comparar_com_real(con, "_backtest_municipio", "backtest")
+
+
+def _comparar_com_real(
+    con: duckdb.DuckDBPyConnection, origem: str, destino: str, grupo: tuple[str, ...] = ()
+) -> None:
+    """Agrega `origem` (projetado × real por município) nos níveis Brasil, UF e município.
+
+    Por linha: a % dos válidos do lado Lula projetada e a real, o erro em pp, o vencedor de
+    cada um e se bateu, e o erro por categoria em fração dos aptos. Em `{destino}_acerto`,
+    a % de UFs e de municípios em que o vencedor bateu, sem ponderar e ponderada pelos aptos
+    do 1º turno. `grupo` são colunas a mais de `origem` que separam as linhas (o cenário).
+    """
+
     def vencedor(lado: str) -> str:
         return (
             f"case when sum(lula_{lado}) > sum(flavio_{lado}) then 'lula' "
@@ -585,10 +613,14 @@ def _backtest(con: duckdb.DuckDBPyConnection) -> None:
         f"sum({j}_projetado) / sum(aptos) - sum({j}_real) / sum(aptos_real) as erro_aptos_{j}"
         for j in J
     )
+    prefixo = "".join(f"{c}, " for c in grupo)
+    conjuntos = ", ".join(
+        f"({', '.join([*grupo, *nivel])})" for nivel in ([], ["uf"], ["uf", "cd_municipio"])
+    )
     con.execute(
         f"""
-        create table backtest as
-        select case when grouping(uf) = 1 then 'brasil'
+        create table {destino} as
+        select {prefixo}case when grouping(uf) = 1 then 'brasil'
                     when grouping(cd_municipio) = 1 then 'uf'
                     else 'municipio' end as nivel,
                uf, cd_municipio,
@@ -601,21 +633,19 @@ def _backtest(con: duckdb.DuckDBPyConnection) -> None:
                {vencedor("real")} as vencedor_real,
                {vencedor("projetado")} = {vencedor("real")} as acertou,
                {erros}
-        from _backtest_municipio
-        group by grouping sets ((), (uf), (uf, cd_municipio))
+        from {origem}
+        group by grouping sets ({conjuntos})
         """
     )
-    # A % de unidades em que o lado vencedor bateu, sem ponderar e ponderada pelos aptos
-    # do 1º turno. O exterior (ZZ) conta como uma UF a mais, como na projeção.
     con.execute(
-        """
-        create table backtest_acerto as
-        select nivel, count(*) as unidades, count(*) filter (where acertou) as acertos,
+        f"""
+        create table {destino}_acerto as
+        select {prefixo}nivel, count(*) as unidades, count(*) filter (where acertou) as acertos,
                avg(acertou::int) as pct_acerto,
                sum(aptos) filter (where acertou) / sum(aptos) as pct_acerto_aptos
-        from backtest
+        from {destino}
         where nivel <> 'brasil'
-        group by nivel
+        group by {prefixo}nivel
         """
     )
 
@@ -800,6 +830,316 @@ def _primeiro_turno(con: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def _confronto(con: duckdb.DuckDBPyConnection) -> None:
+    """A projeção de cada cenário contra o 2º turno real de ANO_ALVO, só no território
+    nacional, nos níveis Brasil, UF e município, como no backtest."""
+    total = ", ".join(f"sum({j}) as {j}" for j in J)
+    con.execute(
+        f"""
+        create table _confronto_municipio as
+        with real as (
+            select uf, cd_municipio, any_value(nm_municipio) as nm_municipio,
+                   sum(aptos) as aptos, {total}
+            from categorias where ano = {ANO_ALVO} and turno = 2 and uf <> '{UF_EXTERIOR}'
+            group by all
+        )
+        select p.cenario, p.uf, p.cd_municipio, r.nm_municipio, p.aptos, r.aptos as aptos_real,
+               {", ".join(f"p.{j} as {j}_projetado, r.{j} as {j}_real" for j in J)}
+        from projecao p
+        join real r using (uf, cd_municipio)
+        where p.nivel = 'municipio'
+        """
+    )
+    _comparar_com_real(con, "_confronto_municipio", "confronto", ("cenario",))
+
+
+def _comparacao_transferencia(con: duckdb.DuckDBPyConnection) -> None:
+    """O β de ANO_ALVO ao lado do de ANO_BASE, por (k, j), no Brasil e por UF, sem o exterior.
+
+    O β Brasil é recalculado sem a zona do exterior, com a mesma média das zonas ponderada
+    pelos eleitores de cada categoria; o `tvd` (0,5 · Σ_j |β_alvo − β_base|) se repete nas
+    linhas j de cada k.
+    """
+    eleitores = ", ".join(f"sum(aptos_1t * {k}_1t) as {k}" for k in K)
+    media = ", ".join(f"sum(n.eleitores * b.{j}) / sum(n.eleitores) as {j}" for j in J)
+    anos = f"({ANO_BASE}, {ANO_ALVO})"
+    con.execute(
+        f"""
+        create table comparacao_transferencia as
+        with contagem as (
+            select ano, uf, zona, {eleitores}
+            from painel where ano in {anos} and uf <> '{UF_EXTERIOR}'
+            group by all
+        ),
+        n as (unpivot contagem on {", ".join(K)} into name k value eleitores),
+        largo as (
+            select b.ano, 'brasil' as nivel, null::varchar as uf, b.k, {media}
+            from beta b
+            join n using (ano, uf, zona, k)
+            where b.nivel = 'zona'
+            group by b.ano, b.k
+            union all
+            select ano, nivel, uf, k, {", ".join(J)}
+            from beta where ano in {anos} and nivel = 'uf' and uf <> '{UF_EXTERIOR}'
+        ),
+        longo as (unpivot largo on {", ".join(J)} into name j value valor)
+        select a.nivel, a.uf, a.k, a.j,
+               a.valor as beta_{ANO_BASE}, b.valor as beta_{ANO_ALVO},
+               b.valor - a.valor as diferenca,
+               0.5 * sum(abs(b.valor - a.valor)) over (partition by a.nivel, a.uf, a.k) as tvd
+        from longo a
+        join longo b on (b.nivel, b.uf, b.k, b.j) is not distinct from (a.nivel, a.uf, a.k, a.j)
+        where a.ano = {ANO_BASE} and b.ano = {ANO_ALVO}
+        """
+    )
+
+
+def _votos_municipio(con: duckdb.DuckDBPyConnection) -> None:
+    """Os votos absolutos de cada município brasileiro no 1º e no 2º turno de ANO_ALVO, a
+    variação entre eles e a trajetória do lado na frente desde o 2º turno de ANO_BASE.
+
+    O lado na frente conta só os dois lados, como em `viradas_municipio`. `liberado` é o que
+    saiu de outros, brancos, nulos e abstenção do 1º para o 2º turno: Δlula + Δflavio =
+    liberado + Δaptos. Os limites por seção não usam modelo: se o Flávio cai numa seção,
+    pelo menos essa queda saiu dele; e de quem votou no Flávio no 1º turno, pelo menos
+    max(0, flavio_1t + lula_2t − aptos) votou no Lula no 2º.
+    """
+    soma = ", ".join(f"sum({k}) as {k}" for k in K)
+    turnos = f"(({ANO_BASE}, 2), ({ANO_ALVO}, 1), ({ANO_ALVO}, 2))"
+
+    def lado(t: str) -> str:
+        return (
+            f"case when {t}.lula > {t}.flavio then 'lula' "
+            f"when {t}.lula < {t}.flavio then 'flavio' when {t}.lula = {t}.flavio then 'empate' end"
+        )
+
+    def faixa() -> str:
+        casos = " ".join(
+            f"when t2.aptos <= {limite} then '{nome}'" for limite, nome in FAIXAS_APTOS if limite
+        )
+        return f"case {casos} else '{FAIXAS_APTOS[-1][1]}' end"
+
+    turno_1 = ", ".join(f"t1.{k} as {k}_1t" for k in K)
+    turno_2 = ", ".join(f"t2.{k} as {k}_2t" for k in K)
+    delta = ", ".join(f"t2.{c} - t1.{c} as delta_{c}" for c in ("aptos", *K))
+    limites = ", ".join(
+        f"sum(greatest(t1.{c} - t2.{c}, 0)) as saida_min_{c}, "
+        f"sum(greatest(t2.{c} - t1.{c}, 0)) as entrada_min_{c}"
+        for c in ("lula", "flavio")
+    )
+    con.execute(
+        f"""
+        create table votos_municipio as
+        with turno as (
+            select ano, turno, uf, cd_municipio, any_value(nm_municipio) as nm_municipio,
+                   sum(aptos) as aptos, {soma}
+            from categorias
+            where (ano, turno) in {turnos} and uf <> '{UF_EXTERIOR}'
+            group by all
+        ),
+        secoes as (
+            select uf, cd_municipio, {limites},
+                   sum(greatest(t1.flavio + t2.lula - greatest(t1.aptos, t2.aptos), 0))
+                       as flavio_para_lula_min,
+                   sum(least(t1.flavio, t2.lula)) as flavio_para_lula_max
+            from categorias t1
+            join categorias t2 using (ano, uf, cd_municipio, zona, secao)
+            where t1.ano = {ANO_ALVO} and t1.turno = 1 and t2.turno = 2
+                and uf <> '{UF_EXTERIOR}'
+            group by all
+        ),
+        unido as (
+            select uf, cd_municipio, t2.nm_municipio,
+                   t1.aptos as aptos_1t, t2.aptos as aptos_2t, {turno_1}, {turno_2}, {delta},
+                   t1.outros + (t1.branco - t2.branco) + (t1.nulo - t2.nulo)
+                       + (t1.abstencao - t2.abstencao) as liberado,
+                   t0.lula / (t0.lula + t0.flavio) as d_{ANO_BASE},
+                   t1.lula / (t1.lula + t1.flavio) as d_1t,
+                   t2.lula / (t2.lula + t2.flavio) as d_2t,
+                   {lado("t0")} as vencedor_{ANO_BASE},
+                   {lado("t1")} as lider_1t,
+                   {lado("t2")} as vencedor_2t,
+                   {faixa()} as faixa_aptos
+            from (select * from turno where ano = {ANO_ALVO} and turno = 1) t1
+            join (select * from turno where ano = {ANO_ALVO} and turno = 2) t2
+                using (uf, cd_municipio)
+            left join (select * from turno where ano = {ANO_BASE}) t0 using (uf, cd_municipio)
+        )
+        select u.uf, u.cd_municipio, i.cd_municipio_ibge, u.* exclude (uf, cd_municipio),
+               coalesce(u.vencedor_{ANO_BASE}, 'sem_{ANO_BASE}') || '/' || u.lider_1t || '/'
+                   || u.vencedor_2t as trajetoria,
+               case when (u.lider_1t, u.vencedor_2t) = ('flavio', 'lula') then 'virou_para_lula'
+                    when (u.lider_1t, u.vencedor_2t) = ('lula', 'flavio')
+                        then 'virou_para_flavio'
+                    when (u.lider_1t, u.vencedor_2t) = ('lula', 'lula') then 'lula_manteve'
+                    when (u.lider_1t, u.vencedor_2t) = ('flavio', 'flavio')
+                        then 'flavio_manteve'
+                    else 'empate' end as situacao,
+               -- As categorias de cor do mapa do 2º turno, por cima da gradação; quem não
+               -- está em nenhuma fica só na gradação (nulo).
+               case when (u.vencedor_{ANO_BASE}, u.lider_1t, u.vencedor_2t)
+                        = ('lula', 'flavio', 'flavio') then 'roxo'
+                    when (u.vencedor_{ANO_BASE}, u.lider_1t, u.vencedor_2t)
+                        = ('lula', 'flavio', 'lula') then 'especial'
+                    when (u.vencedor_{ANO_BASE}, u.lider_1t, u.vencedor_2t)
+                        = ('flavio', 'flavio', 'lula') then 'vermelho' end as cor_mapa,
+               u.delta_lula > u.liberado as ganho_lula_maior_que_liberado,
+               s.* exclude (uf, cd_municipio)
+        from unido u
+        left join municipio_ibge i on i.uf = u.uf and i.cd_municipio_tse = u.cd_municipio
+        left join secoes s on (s.uf, s.cd_municipio) = (u.uf, u.cd_municipio)
+        """
+    )
+    [(faltando,)] = con.execute(
+        "select count(*) from votos_municipio where cd_municipio_ibge is null"
+    ).fetchall()
+    if faltando:
+        raise GoldInconsistente(f"{faltando} municípios do 2º turno de {ANO_ALVO} sem IBGE")
+    cenarios = [c for (c,) in con.execute("select distinct cenario from projecao").fetchall()]
+    for cenario in sorted(cenarios):
+        con.execute(
+            f"""
+            alter table votos_municipio add column lula_projetado_{cenario} double;
+            alter table votos_municipio add column flavio_projetado_{cenario} double;
+            update votos_municipio v
+            set lula_projetado_{cenario} = c.lula_projetado,
+                flavio_projetado_{cenario} = c.flavio_projetado
+            from _confronto_municipio c
+            where c.cenario = '{cenario}'
+                and (c.uf, c.cd_municipio) = (v.uf, v.cd_municipio)
+            """
+        )
+
+
+def _fluxo(con: duckdb.DuckDBPyConnection) -> None:
+    """Os votos de cada categoria do 1º turno de ANO_ALVO que o β de ANO_ALVO manda para cada
+    categoria do 2º, por município brasileiro. É uma estimativa da inferência ecológica, não
+    voto individual. A linha `residuo` é o 2º turno real menos a soma das estimadas, então
+    as 7 linhas de um município somam o 2º turno real.
+
+    Cada seção usa o β da sua zona (o próprio ou o da UF, ADR 0002); no mesmo ano, a zona
+    da seção é a do β, sem ligação.
+    """
+    fluxo = ", ".join(f"sum(n.votos * b.{j}) as {j}" for j in J)
+    con.execute(
+        f"""
+        create table fluxo_municipio as
+        with unidade as (
+            select uf, cd_municipio, zona, {", ".join(f"sum({k}) as {k}" for k in K)}
+            from categorias
+            where ano = {ANO_ALVO} and turno = 1 and uf <> '{UF_EXTERIOR}'
+            group by all
+        ),
+        n as (unpivot unidade on {", ".join(K)} into name k value votos)
+        select n.uf, n.cd_municipio, n.k, {fluxo}
+        from n
+        join beta b on b.ano = {ANO_ALVO} and b.nivel = 'zona'
+            and (b.uf, b.zona, b.k) = (n.uf, n.zona, n.k)
+        group by all
+        """
+    )
+    [(sem_beta,)] = con.execute(
+        f"""
+        select count(*) from (
+            select uf, cd_municipio from votos_municipio
+            except select uf, cd_municipio from fluxo_municipio
+            group by all having count(*) = {len(K)}
+        )
+        """
+    ).fetchall()
+    if sem_beta:
+        raise GoldInconsistente(f"{sem_beta} municípios de {ANO_ALVO} sem β de {ANO_ALVO}")
+    residuo = ", ".join(f"any_value(v.{j}_2t) - sum(f.{j}) as {j}" for j in J)
+    con.execute(
+        f"""
+        insert into fluxo_municipio
+        select f.uf, f.cd_municipio, 'residuo', {residuo}
+        from fluxo_municipio f
+        join votos_municipio v using (uf, cd_municipio)
+        group by all
+        """
+    )
+
+
+def _resumo_2026(con: duckdb.DuckDBPyConnection) -> None:
+    """Somas de `votos_municipio` e de `fluxo_municipio` por grupo de municípios.
+
+    Cada `dimensao` cobre os municípios brasileiros uma vez: `brasil`, `uf`, `situacao`,
+    `cor_mapa` (`gradacao` para os que ficam só na gradação), `trajetoria` e `faixa_aptos`.
+    As colunas `pct_*` são a parte do grupo no total da dimensão.
+    """
+    dimensoes = {
+        "brasil": "'brasil'",
+        "uf": "uf",
+        "situacao": "situacao",
+        "cor_mapa": "coalesce(cor_mapa, 'gradacao')",
+        "trajetoria": "trajetoria",
+        "faixa_aptos": "faixa_aptos",
+    }
+    con.execute(
+        "create table _grupo_municipio as "
+        + " union all ".join(
+            f"select uf, cd_municipio, '{d}' as dimensao, {g} as grupo from votos_municipio"
+            for d, g in dimensoes.items()
+        )
+    )
+    colunas = [
+        c
+        for (c,) in con.execute(
+            "select column_name from duckdb_columns() where table_name = 'votos_municipio' "
+            "and data_type in ('BIGINT', 'HUGEINT', 'DOUBLE', 'INTEGER') "
+            "and not starts_with(column_name, 'd_') "
+            "and column_name not in ('cd_municipio', 'cd_municipio_ibge') order by column_index"
+        ).fetchall()
+    ]
+    cenarios = [c.removeprefix("lula_projetado_") for c in colunas if "lula_projetado_" in c]
+    margens = ", ".join(
+        f"sum(v.lula_projetado_{c} - v.flavio_projetado_{c}) as margem_projetada_{c}, "
+        f"count(*) filter (where (v.lula_projetado_{c} > v.flavio_projetado_{c})"
+        f" = (v.lula_2t > v.flavio_2t)) as acertos_{c}"
+        for c in cenarios
+    )
+    pct = ", ".join(
+        f"{c} / sum({c}) over (partition by dimensao) as pct_{c}"
+        for c in ("aptos_2t", "delta_lula", "delta_flavio", "margem_real")
+    )
+    erros = ", ".join(
+        f"margem_projetada_{c} - margem_real as erro_margem_{c}, "
+        f"(margem_projetada_{c} - margem_real) "
+        f"/ sum(margem_projetada_{c} - margem_real) over (partition by dimensao) "
+        f"as pct_erro_margem_{c}"
+        for c in cenarios
+    )
+    con.execute(
+        f"""
+        create table resumo_2026 as
+        with soma as (
+            select g.dimensao, g.grupo, count(*) as municipios,
+                   {", ".join(f"sum(v.{c}) as {c}" for c in colunas)},
+                   count(*) filter (where v.ganho_lula_maior_que_liberado)
+                       as municipios_ganho_lula_maior_que_liberado,
+                   sum(v.lula_2t - v.flavio_2t) as margem_real,
+                   sum(v.lula_1t - v.flavio_1t) as margem_1t,
+                   {margens}
+            from _grupo_municipio g
+            join votos_municipio v using (uf, cd_municipio)
+            group by g.dimensao, g.grupo
+        )
+        select *, lula_2t / (lula_2t + flavio_2t) as pct_lula_validos_2t, {pct}, {erros}
+        from soma
+        """
+    )
+    con.execute(
+        f"""
+        create table fluxo_resumo as
+        select g.dimensao, g.grupo, f.k, {", ".join(f"sum(f.{j}) as {j}" for j in J)}
+        from _grupo_municipio g
+        join fluxo_municipio f using (uf, cd_municipio)
+        group by all
+        """
+    )
+
+
 def _gravar(con: duckdb.DuckDBPyConnection, saida: Path) -> list[Tabela]:
     fracoes = ", ".join(f"{k} / aptos as {k}" for k in K)
     consultas = {
@@ -823,6 +1163,16 @@ def _gravar(con: duckdb.DuckDBPyConnection, saida: Path) -> list[Tabela]:
             f"backtest_{ANO_BASE}": "select * from backtest",
             f"backtest_{ANO_BASE}_acerto": "select * from backtest_acerto",
             "estabilidade_transferencia": "select * from estabilidade",
+        }
+    if con.execute("select 1 from duckdb_tables() where table_name = 'confronto'").fetchall():
+        consultas |= {
+            f"confronto_{ANO_ALVO}": "select * from confronto",
+            f"confronto_{ANO_ALVO}_acerto": "select * from confronto_acerto",
+            f"comparacao_transferencia_{ANO_ALVO}": "select * from comparacao_transferencia",
+            f"votos_municipio_{ANO_ALVO}": "select * from votos_municipio",
+            f"fluxo_municipio_{ANO_ALVO}": "select * from fluxo_municipio",
+            f"resumo_{ANO_ALVO}": "select * from resumo_2026",
+            f"fluxo_resumo_{ANO_ALVO}": "select * from fluxo_resumo",
         }
     for (ano,) in con.execute("select distinct ano from painel").fetchall():
         consultas[f"painel_secao_{ano}"] = f"select * exclude (ano) from painel where ano = {ano}"

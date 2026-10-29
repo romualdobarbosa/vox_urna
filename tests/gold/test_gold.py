@@ -98,10 +98,13 @@ def gravar_silver(
         con.close()
 
 
-def montar_silver(dados: Path, refs=(2022,), seed=0, geografia=None) -> None:
+def montar_silver(
+    dados: Path, refs=(2022,), seed=0, geografia=None, segundo_turno_2026=False
+) -> None:
     """Cada referência com o 2º turno gerado por BETA a partir do 1º, e o 1º turno de 2026.
 
     `geografia` troca as seções de uma referência ({ano: [(uf, município, zona, seções)]}).
+    Com `segundo_turno_2026`, o 2º turno de 2026 também sai do 1º por BETA.
     """
     rng = np.random.default_rng(seed)
     for ano in refs:
@@ -119,13 +122,17 @@ def montar_silver(dados: Path, refs=(2022,), seed=0, geografia=None) -> None:
         gravar_silver(dados, ano, 1, t1)
         gravar_silver(dados, ano, 2, t2)
 
-    t2026 = [
-        secao(2026, uf, m, z, numero, 300, rng.multinomial(300, [0.3, 0.35, 0.1, 0.02, 0.03, 0.2]))
-        for numero, (uf, m, z) in enumerate(
-            (uf, m, z) for uf, m, z, n in SECOES_2026 for _ in range(n)
-        )
-    ]
-    gravar_silver(dados, 2026, 1, t2026)
+    unidades = [(uf, m, z) for uf, m, z, n in SECOES_2026 for _ in range(n)]
+    x2026 = [rng.multinomial(300, [0.3, 0.35, 0.1, 0.02, 0.03, 0.2]) for _ in unidades]
+    pares = list(enumerate(zip(unidades, x2026, strict=True)))
+    gravar_silver(dados, 2026, 1, [secao(2026, *u, n, 300, x) for n, (u, x) in pares])
+    if segundo_turno_2026:
+        y2026 = [np.floor(x @ BETA) for _, (_, x) in pares]
+        t2 = [
+            secao(2026, *u, n, 300, [y[0], y[1], 0, y[2], y[3]])
+            for (n, (u, _)), y in zip(pares, y2026, strict=True)
+        ]
+        gravar_silver(dados, 2026, 2, t2)
 
 
 def ler(dados: Path, tabela: str, filtro: str = "true") -> list[dict]:
@@ -555,3 +562,196 @@ def test_primeiro_turno_soma_as_secoes_por_uf_e_no_brasil_com_o_exterior(gold_vi
         assert brasil[k] == round(sum(s[k] * s["aptos"] for s in secoes))
         assert brasil[k] == sum(r[k] for r in por_uf.values())
     assert brasil["aptos"] == sum(s["aptos"] for s in secoes)
+
+
+# Municípios a mais do AC, na zona 9, com uma seção de 200 aptos cada: (lula, flavio, outros,
+# branco, nulo) no 2º turno de 2022, no 1º e no 2º turno de 2026.
+TRAJETORIAS = {
+    1058: ((60, 40, 0, 0, 0), (30, 50, 20, 0, 0), (40, 60, 0, 0, 0)),  # roxo
+    1015: ((60, 40, 0, 0, 0), (30, 50, 20, 0, 0), (60, 50, 0, 0, 0)),  # especial
+    1074: ((30, 70, 0, 0, 0), (30, 50, 20, 0, 0), (55, 50, 0, 0, 0)),  # vermelho
+    1112: ((60, 40, 0, 0, 0), (50, 30, 20, 0, 0), (40, 60, 0, 0, 0)),  # Lula/Lula/Flávio
+    # O Flávio segue na frente e perde votos: o ganho do Lula passa do que se liberou.
+    1104: ((40, 60, 0, 0, 0), (40, 150, 0, 0, 0), (90, 100, 0, 0, 0)),
+}
+# Uma cidade do exterior com votos nos dois turnos de 2026, que fica fora de tudo.
+EXTERIOR_2026 = (99001, (10, 40, 5, 0, 0), (20, 30, 0, 0, 0))
+
+
+@pytest.fixture
+def gold_2026(tmp_path):
+    montar_silver(
+        tmp_path, geografia={2022: [*SECOES_REF, SO_2022_EXTERIOR]}, segundo_turno_2026=True
+    )
+    for i, (ano, turno) in enumerate(((2022, 2), (2026, 1), (2026, 2))):
+        secoes = [
+            secao(ano, "AC", m, 9, 9000 + n, 200, contagens[i])
+            for n, (m, contagens) in enumerate(TRAJETORIAS.items())
+        ]
+        if ano == 2026:
+            secoes.append(secao(ano, "ZZ", EXTERIOR_2026[0], 1, 9100, 200, EXTERIOR_2026[i]))
+        gravar_silver(tmp_path, ano, turno, secoes, arquivo="trajetorias.parquet")
+    construir(tmp_path)
+    return tmp_path
+
+
+def test_beta_de_2026_sai_do_painel_dos_dois_turnos_de_2026(gold_2026):
+    [taxa] = ler(gold_2026, "taxa_match", "ligacao = 'painel_secao_2026'")
+    assert (taxa["passo"], taxa["secoes"]) == ("casou", 27 + len(TRAJETORIAS) + 1)
+    zona_1 = ler(gold_2026, "transferencia_zona_2026", "nivel = 'zona' and uf = 'AC' and zona = 1")
+    assert {linha["fonte"] for linha in zona_1} == {"zona"}
+    for categoria in ("lula", "flavio"):
+        i = K.index(categoria)
+        np.testing.assert_allclose(beta(zona_1)[i], BETA[i], atol=0.05)
+    # O 2º turno de 2026 não muda a projeção: ela só usa o β das referências.
+    assert {linha["ano_ref"] for linha in ler(gold_2026, "ligacao_2026")} == {2022}
+
+
+def test_comparacao_poe_o_beta_de_2026_ao_lado_do_de_2022_sem_o_exterior(gold_2026):
+    comparacao = ler(gold_2026, "comparacao_transferencia_2026")
+    assert {(c["nivel"], c["uf"]) for c in comparacao} == {("brasil", None), ("uf", "AC")}
+    assert len(comparacao) == 2 * len(K) * len(J)
+
+    for ano in (2022, 2026):
+        uf = beta(ler(gold_2026, f"transferencia_zona_{ano}", "nivel = 'uf' and uf = 'AC'"))
+        por_kj = {(c["k"], c["j"]): c[f"beta_{ano}"] for c in comparacao if c["nivel"] == "uf"}
+        np.testing.assert_allclose([[por_kj[k, j] for j in J] for k in K], uf)
+        # Sem o exterior, o Brasil é a média das zonas do AC.
+        painel = ler(gold_2026, f"painel_secao_{ano}", "uf = 'AC'")
+        zonas = ler(gold_2026, f"transferencia_zona_{ano}", "nivel = 'zona' and uf = 'AC'")
+        for k in K:
+            peso = {
+                z["zona"]: sum(
+                    p["aptos_1t"] * p[f"{k}_1t"] for p in painel if p["zona"] == z["zona"]
+                )
+                for z in zonas
+                if z["k"] == k
+            }
+            linha = {z["zona"]: np.array([z[j] for j in J]) for z in zonas if z["k"] == k}
+            esperado = sum(peso[z] * linha[z] for z in peso) / sum(peso.values())
+            brasil = {
+                c["j"]: c[f"beta_{ano}"]
+                for c in comparacao
+                if c["nivel"] == "brasil" and c["k"] == k
+            }
+            np.testing.assert_allclose([brasil[j] for j in J], esperado)
+    for c in comparacao:
+        assert c["diferenca"] == pytest.approx(c["beta_2026"] - c["beta_2022"])
+        mesma_linha = [d for d in comparacao if (d["nivel"], d["k"]) == (c["nivel"], c["k"])]
+        assert c["tvd"] == pytest.approx(0.5 * sum(abs(d["diferenca"]) for d in mesma_linha))
+
+
+def test_confronto_compara_cada_cenario_com_o_2o_turno_real_sem_o_exterior(gold_2026):
+    confronto = ler(gold_2026, "confronto_2026")
+    assert {c["cenario"] for c in confronto} == {"base", "outros_divididos"}
+    assert "ZZ" not in {c["uf"] for c in confronto}
+
+    filtro = "cd_municipio = 1015"
+    [linha] = [c for c in confronto if c["cenario"] == "base" and c["cd_municipio"] == 1015]
+    [projetado] = ler(
+        gold_2026, "projecao_2026", f"cenario = 'base' and nivel = 'municipio' and {filtro}"
+    )
+    real = votos(gold_2026, 2026, 2, filtro)
+    assert linha["pct_lula_validos_projetado"] == pytest.approx(projetado["pct_lula_validos"])
+    assert linha["pct_lula_validos_real"] == pytest.approx(60 / 110)
+    assert linha["erro_pp"] == pytest.approx(100 * (projetado["pct_lula_validos"] - 60 / 110))
+    assert linha["vencedor_real"] == "lula"
+    for j in J:
+        assert linha[f"erro_aptos_{j}"] == pytest.approx(
+            projetado[j] / projetado["aptos"] - real[K.index(j)] / 200, abs=1e-12
+        )
+
+    # O Brasil do confronto é a soma do território nacional, sem a cidade do exterior.
+    [brasil] = [c for c in confronto if c["cenario"] == "base" and c["nivel"] == "brasil"]
+    nacional = votos(gold_2026, 2026, 2, "uf <> 'ZZ'")
+    assert brasil["pct_lula_validos_real"] == pytest.approx(
+        nacional[0] / (nacional[0] + nacional[1])
+    )
+
+    for cenario in ("base", "outros_divididos"):
+        for nivel in ("uf", "municipio"):
+            linhas = [c for c in confronto if (c["cenario"], c["nivel"]) == (cenario, nivel)]
+            [acerto] = ler(
+                gold_2026, "confronto_2026_acerto", f"cenario = '{cenario}' and nivel = '{nivel}'"
+            )
+            certas = [c for c in linhas if c["acertou"]]
+            assert (acerto["unidades"], acerto["acertos"]) == (len(linhas), len(certas))
+            assert acerto["pct_acerto_aptos"] == pytest.approx(
+                sum(c["aptos"] for c in certas) / sum(c["aptos"] for c in linhas)
+            )
+
+
+def test_votos_por_municipio_trazem_a_trajetoria_a_cor_do_mapa_e_os_limites(gold_2026):
+    municipios = {m["cd_municipio"]: m for m in ler(gold_2026, "votos_municipio_2026")}
+    assert 99001 not in municipios
+
+    assert {m: municipios[m]["cor_mapa"] for m in TRAJETORIAS} == {
+        1058: "roxo",
+        1015: "especial",
+        1074: "vermelho",
+        1112: None,
+        1104: None,
+    }
+    assert municipios[1112]["trajetoria"] == "lula/lula/flavio"
+    assert municipios[1112]["situacao"] == "virou_para_flavio"
+    assert municipios[1015]["situacao"] == "virou_para_lula"
+    assert municipios[1007]["trajetoria"].startswith("sem_2022/")
+
+    jordao = municipios[1104]
+    assert jordao["situacao"] == "flavio_manteve"
+    assert (jordao["delta_lula"], jordao["delta_flavio"], jordao["liberado"]) == (50, -50, 0)
+    assert jordao["ganho_lula_maior_que_liberado"]
+    assert (jordao["saida_min_flavio"], jordao["entrada_min_lula"]) == (50, 50)
+    # Dos 150 do Flávio, pelo menos 150 + 90 − 200 = 40 foram para o Lula, e no máximo 90.
+    assert (jordao["flavio_para_lula_min"], jordao["flavio_para_lula_max"]) == (40, 90)
+    assert jordao["d_2t"] == pytest.approx(90 / 190)
+    assert jordao["cd_municipio_ibge"] == 1200328
+    for m in municipios.values():
+        assert m["delta_lula"] + m["delta_flavio"] == m["liberado"] + m["delta_aptos"]
+        assert m["lula_projetado_base"] is not None
+
+
+def test_fluxo_reparte_o_1o_turno_e_o_residuo_fecha_o_2o_turno_real(gold_2026):
+    fluxo = ler(gold_2026, "fluxo_municipio_2026", "cd_municipio = 1120")
+    assert {f["k"] for f in fluxo} == {*K, "residuo"}
+    t1 = votos(gold_2026, 2026, 1, "cd_municipio = 1120")
+    t2 = votos(gold_2026, 2026, 2, "cd_municipio = 1120")
+    for i, k in enumerate(K):
+        [linha] = [f for f in fluxo if f["k"] == k]
+        assert sum(linha[j] for j in J) == pytest.approx(t1[i])
+    for j in J:
+        assert sum(f[j] for f in fluxo) == pytest.approx(t2[K.index(j)])
+    assert not ler(gold_2026, "fluxo_municipio_2026", "uf = 'ZZ'")
+
+
+def test_resumo_soma_os_municipios_em_cada_dimensao(gold_2026):
+    municipios = ler(gold_2026, "votos_municipio_2026")
+    resumo = ler(gold_2026, "resumo_2026")
+    assert {r["dimensao"] for r in resumo} == {
+        "brasil",
+        "uf",
+        "situacao",
+        "cor_mapa",
+        "trajetoria",
+        "faixa_aptos",
+    }
+    [brasil] = [r for r in resumo if r["dimensao"] == "brasil"]
+    assert brasil["municipios"] == len(municipios)
+    assert brasil["delta_lula"] == sum(m["delta_lula"] for m in municipios)
+    assert brasil["margem_real"] == sum(m["lula_2t"] - m["flavio_2t"] for m in municipios)
+    assert brasil["municipios_ganho_lula_maior_que_liberado"] == sum(
+        m["ganho_lula_maior_que_liberado"] for m in municipios
+    )
+    for dimensao in {r["dimensao"] for r in resumo}:
+        grupos = [r for r in resumo if r["dimensao"] == dimensao]
+        assert sum(r["municipios"] for r in grupos) == len(municipios)
+        assert sum(r["pct_delta_lula"] for r in grupos) == pytest.approx(1)
+    [roxo] = [r for r in resumo if (r["dimensao"], r["grupo"]) == ("cor_mapa", "roxo")]
+    roxos = [m for m in municipios if m["cor_mapa"] == "roxo"]
+    assert 1058 in {m["cd_municipio"] for m in roxos}
+    for coluna in ("delta_lula", "delta_flavio", "delta_outros", "delta_abstencao"):
+        assert roxo[coluna] == sum(m[coluna] for m in roxos)
+
+    fluxo = ler(gold_2026, "fluxo_resumo_2026", "dimensao = 'brasil'")
+    for j in J:
+        assert sum(f[j] for f in fluxo) == pytest.approx(brasil[f"{j}_2t"])

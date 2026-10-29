@@ -84,8 +84,16 @@ _Avoid_: margem de erro, intervalo de confiança, erro amostral
 O quanto a transferência de votos de cada categoria do 1º turno se repete de uma eleição para a outra (2018 e 2022).
 _Avoid_: robustez, consistência
 
+**Votos liberados**:
+Num município, o que sai do 1º para o 2º turno de "outros" (que somem no 2º turno) e a queda de brancos, nulos e abstenção. Com os aptos constantes, o que os dois lados ganham juntos é exatamente o liberado.
+_Avoid_: sobra, votos disponíveis
+
+**Limite contábil**:
+Um mínimo ou máximo de votos que mudaram de categoria numa seção, tirado só das contagens dos dois turnos, sem modelo. Se um candidato cai de um turno para o outro numa seção, pelo menos essa queda saiu dele.
+_Avoid_: estimativa, bound
+
 **Virada**:
-Um município em que o lado na frente no 1º turno de 2026 não é o mesmo que venceu no 2º turno de 2022, contando só os votos dos dois lados. Descreve o 1º turno; não é uma projeção.
+Um município em que o lado na frente no 1º turno de 2026 não é o mesmo que venceu no 2º turno de 2022, contando só os votos dos dois lados. Descreve o 1º turno; não é uma projeção. Depois do 2º turno de 2026, "virou" também descreve o município em que o lado na frente no 1º turno perdeu no 2º (`situacao` em `votos_municipio_2026`); o empate exato nunca é virada.
 _Avoid_: mudança de lado, troca, flip
 
 **Referência externa**:

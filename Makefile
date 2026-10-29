@@ -15,8 +15,10 @@ bronze-urna:
 silver: bronze bronze-resultados
 	uv run vox-urna silver
 
+# Uma thread no BLAS: o SLSQP resolve milhares de matrizes pequenas, e com o BLAS multithread
+# as threads disputam os núcleos (11 min contra 1min30).
 gold: silver
-	uv run vox-urna gold
+	OPENBLAS_NUM_THREADS=1 uv run vox-urna gold
 
 test:
 	uv run pytest
