@@ -222,3 +222,33 @@ def test_primeiro_turno_brasil_soma_os_validos_e_poe_flavio_na_frente():
 
     assert p["lula"] + p["flavio"] + p["outros"] == pytest.approx(1)
     assert p["diferenca_votos"] > 0
+
+
+def test_virada_por_regiao_e_por_recorte_soma_a_virada_do_brasil():
+    gold = dados.carregar()
+    brasil = dados.linha_resumo(gold.resumo, "brasil", "brasil")
+    regioes = dados.tabela_virada(gold.resumo, "regiao", dados.NOMES_REGIAO)
+    assert regioes["nome"].to_list() == list(dados.NOMES_REGIAO.values())
+    assert regioes["virada"].sum() == pytest.approx(brasil["virada"])
+    recortes = dados.tabela_virada(gold.resumo, "recorte_faixa", dados.NOMES_RECORTE)
+    assert recortes["virada"].sum() == pytest.approx(brasil["virada"])
+    assert recortes["nome"][0] == "Capitais"
+    assert recortes.filter(pl.col("nome") == "Capitais")["municipios"].item() == 27
+
+
+def test_transferencia_comparada_traz_os_seis_grupos_nos_dois_anos():
+    gold = dados.carregar()
+    transf = dados.transferencia_comparada(gold.comparacao_transferencia)
+    assert transf["origem"].to_list()[:2] == ["Lado Lula", "Lado Flávio"]
+    assert transf.height == 6
+    assert transf.select(pl.exclude("origem")).min_horizontal().min() >= 0
+
+
+def test_mapas_do_2o_turno_cobrem_os_municipios_com_o_codigo_da_malha():
+    gold = dados.carregar()
+    vm = gold.votos_municipio
+    for tabela in (dados.mapa_2o_turno(vm), dados.mapa_virada(vm), dados.mapa_nao_voto(vm)):
+        assert tabela.height == vm.height
+        assert tabela["cd_ibge"].null_count() == 0
+    acre = dados.mapa_virada(vm, "AC")
+    assert acre["nome"].str.ends_with("(AC)").all()

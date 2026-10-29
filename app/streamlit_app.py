@@ -26,7 +26,7 @@ recarregar(dados)
 recarregar(mapa)
 from mapa import COR  # noqa: E402  (depois da recarga, para pegar a versão nova)
 
-st.set_page_config(page_title="Vox Urna: projeção do 2º turno de 2026", layout="wide")
+st.set_page_config(page_title="Vox Urna: a virada do 2º turno de 2026", layout="wide")
 
 POR_EXTENSO = {2: "dois", 3: "três"}
 DESTAQUE = "#E8A33D"  # neutro entre os lados: o achado não é de um candidato
@@ -250,165 +250,354 @@ def mostrar_matriz(ano: int, uf: str) -> None:
     )
 
 
-st.warning(dados.AVISO, icon="⚠️")
-st.title("O resultado do 1º turno também te surpreendeu?")
+# Tudo desta aba é do território brasileiro, sem o exterior.
+br = dados.linha_resumo(g.resumo, "brasil", "brasil")
+validos_2t = br["lula_2t"] + br["flavio_2t"]
+st.title("Lula virou a eleição, e isso nunca tinha acontecido")
 st.markdown(
-    "#### Veja onde as cidades viraram e o que pode acontecer no 2º turno se cada eleitor "
-    "repetir o que fez em 2018 e 2022."
+    "#### Desde a redemocratização, quem terminou o 1º turno na frente sempre ganhou o 2º "
+    "turno pra presidente. Em 2026, não."
 )
 st.markdown(ASSINATURA)
 
-resultado, aba_dados, metodo, engenharia = st.tabs(
-    ["Resultado", "Dados", "Método", "Como foi feito"]
+virada_aba, aba_dados, metodo, engenharia = st.tabs(
+    ["A virada", "Dados", "Método", "Como foi feito"]
 )
 
-# ---------------------------------------------------------------- Resultado
-with resultado:
-    # A história na ordem em que aconteceu: a surpresa, as viradas, a pergunta, a projeção.
-    turno1 = dados.primeiro_turno_brasil(g.primeiro_turno)
-    viradas_br = dados.resumo_viradas(g.viradas_resumo)
-    para_flavio, para_lula = viradas_br["lula_para_flavio"], viradas_br["flavio_para_lula"]
-    st.subheader("Onde o lado na frente mudou")
-    st.markdown(
-        "O resultado do 1º turno de 2026 me surpreendeu. Flávio Bolsonaro terminou com "
-        f"{dados.pct(turno1['flavio'])} dos votos válidos e Lula com "
-        f"{dados.pct(turno1['lula'])}, uma diferença de "
-        f"{decimal(turno1['diferenca_votos'] / 1e6)} milhões de votos, quatro anos depois "
-        "de Lula ganhar o 2º turno. Baixei do TSE o boletim de todas as urnas do Brasil, que "
-        "ficam abertos pra qualquer pessoa, pra entender onde isso aconteceu."
-    )
-    cartoes_viradas(viradas_br, "município", detalhes=False)
-    st.markdown(
-        "Comparei município por município, só com os votos dos dois lados. "
-        f"**{dados.inteiro(para_flavio['viradas'])} municípios** que deram vitória a Lula "
-        f"em 2022 agora deram a frente a Flávio, {caminho_contrario(para_lula)}. Nas "
-        "cidades que viraram, o lado Lula perdeu em média "
-        f"{decimal(abs(para_flavio['media_variacao_pp']))} pontos, e a maior queda foi em "
-        f"{local(para_flavio, 'maior')}, com "
-        f"{decimal(abs(para_flavio['maior_variacao_pp']))} pontos. A lista completa, estado "
-        "por estado, está na aba Dados."
-    )
-    st.caption(dados.RESSALVA_VIRADAS)
 
-    st.subheader("E no 2º turno, dá pra virar de novo?")
-    st.markdown(
-        "Daí veio a outra pergunta. Mais de "
-        f"{decimal(turno1['votos_outros'] / 1e6)} milhões de pessoas votaram em outros "
-        "candidatos, e ainda tem os brancos, os nulos e quem não foi votar. Pra saber pra "
-        "onde esse pessoal costuma ir, usei os dados de 2018 e 2022 e calculei, zona por "
-        "zona, como os votos de cada grupo se moveram do 1º pro 2º turno. Depois apliquei "
-        "isso aos votos de 2026."
-    )
+def milhoes(votos: float) -> str:
+    """Votos em milhões com uma casa: 2238452 → "2,2 milhões", 1843449 → "1,8 milhão"."""
+    valor = abs(votos) / 1e6
+    return f"{decimal(valor)} {'milhão' if round(valor, 1) < 2 else 'milhões'}"
 
-    # Manchete: a faixa entre os cenários, nunca um número único.
-    faixa = dados.faixa_brasil(g.projecao)
-    # O lado que vence até no pior cenário dele, se houver.
-    na_frente = [lado for lado in dados.LADOS if faixa[lado][0] > 0.5]
-    if na_frente:
-        st.markdown(
-            f"**Nos {POR_EXTENSO.get(len(ids_cenario), len(ids_cenario))} cenários, "
-            f"{nomes[na_frente[0]]} fica na frente.**"
-        )
-    colunas = st.columns(2)
-    for coluna, lado in zip(colunas, dados.LADOS, strict=True):
-        baixo, alto = faixa[lado]
-        coluna.markdown(
-            f"<div style='border-left: 6px solid {COR[lado]}; padding-left: 12px; "
-            "margin-bottom: 12px'>"
-            f"<div style='font-size: 1.1rem'>{nomes[lado]}</div>"
-            f"<div style='font-size: 2.4rem; font-weight: 700; color: {COR[lado]}'>"
-            f"{dados.pct(baixo)} a {dados.pct(alto)}</div>"
-            f"<div style='opacity: 0.7'>dos votos válidos, conforme o cenário</div></div>",
-            unsafe_allow_html=True,
-        )
-    st.write("")
-    st.markdown(texto_backtest())
-    st.caption(texto_match())
 
-    st.divider()
-    st.markdown("Escolha o cenário pra ver os números e o mapa de cada um.")
-    _, meio, _ = st.columns([1, 2, 1])
-    cenario = meio.radio(
-        "Cenário", ids_cenario, format_func=titulo_cenario, horizontal=True, key="cenario"
-    )
-    if cenario in dados.CENARIOS:
-        meio.caption(dados.CENARIOS[cenario].suposicoes)
-
-    brasil = g.projecao.filter((pl.col("nivel") == "brasil") & (pl.col("cenario") == cenario)).row(
-        0, named=True
-    )
-    brancos_nulos, abstencao = dados.brancos_nulos_abstencao(brasil)
-    colunas = st.columns(4)
-    for coluna, lado in zip(colunas[:2], dados.LADOS, strict=True):
-        coluna.metric(
-            nomes[lado],
-            dados.pct(brasil[f"pct_{lado}_validos"]),
-            help=f"{dados.inteiro(brasil[lado])} votos projetados",
-        )
-    colunas[2].metric(
-        "Brancos e nulos",
-        dados.pct(brancos_nulos),
-        help=f"{dados.inteiro(brasil['branco'] + brasil['nulo'])} votos projetados, em % de "
-        "quem comparece",
-    )
-    colunas[3].metric(
-        "Abstenção",
-        dados.pct(abstencao),
-        help=f"{dados.inteiro(brasil['abstencao'])} eleitores, em % dos aptos",
-    )
-
-    st.subheader("Mapa")
-    st.caption(
-        f"Diferença em pontos percentuais dos votos válidos. Vermelho onde {nomes['lula']} "
-        f"fica à frente, azul onde {nomes['flavio']} fica. O exterior não aparece no mapa "
-        "(está na aba Dados)."
-    )
-    coluna_nivel, coluna_recorte = st.columns(2)
-    nivel = coluna_nivel.radio("Nível do mapa", ["Município", "UF"], horizontal=True)
-    if nivel == "UF":
-        tabela_mapa = dados.tabela_uf(g.projecao, cenario).filter(pl.col("uf") != dados.UF_EXTERIOR)
-        geojson, chave = mapa.malha("uf"), "uf"
-        recorte = None
-    else:
-        ufs = sorted(set(g.projecao["uf"].drop_nulls()) - {dados.UF_EXTERIOR})
-        recorte = coluna_recorte.selectbox(
-            "Recorte",
-            [None, *ufs],
-            format_func=lambda uf: "Brasil inteiro" if uf is None else dados.NOMES_UF[uf],
-        )
-        tabela_mapa = dados.tabela_municipio(g.projecao, g.municipio_ibge, cenario, recorte)
-        geojson, chave = malha_municipio(recorte), "cd_ibge"
-
-    st.plotly_chart(
-        mapa.figura(tabela_mapa, geojson, chave=chave, rotulo="nome", nomes=nomes),
-        width="stretch",
-        config={"scrollZoom": False, "displayModeBar": False},
-    )
-    if nivel == "Município" and recorte in (None, "MT"):
-        st.caption(
-            "Boa Esperança do Norte (MT), instalado em 2025, ainda não tem polígono na malha do "
-            "IBGE, então o território dele aparece dentro de Sorriso e de Nova Ubiratã. A "
-            "projeção do município está na aba Dados."
-        )
-
-    st.subheader("Para onde foram os votos")
-    st.markdown(
-        f"<div style='border-left: 6px solid {DESTAQUE}; background: rgba(232, 163, 61, 0.12);"
-        " padding: 12px 16px; border-radius: 4px; margin-bottom: 12px'>"
-        "Esse é o achado que separa os dois cenários. "
-        "Dos eleitores de outros candidatos que escolheram um lado no 2º turno, "
-        f"<b>{dados.pct(outros_2022, 0)} foram pra Lula em 2022</b>, mas "
-        f"<b>{dados.pct(outros_2018, 0)} foram pra Haddad em 2018</b>. Quem votou num dos "
-        "lados no 1º turno quase sempre fica com ele, e quem votou em outros candidatos muda "
-        "muito de uma eleição pra outra.</div>",
+def cartao(cor: str, titulo: str, valor: str, detalhe: str, coluna=st) -> None:
+    coluna.markdown(
+        f"<div style='border-left: 6px solid {cor}; padding-left: 12px; margin-bottom: 12px'>"
+        f"<div style='font-size: 1.1rem'>{titulo}</div>"
+        f"<div style='font-size: 2.4rem; font-weight: 700; color: {cor}'>{valor}</div>"
+        f"<div style='opacity: 0.7'>{detalhe}</div></div>",
         unsafe_allow_html=True,
     )
-    st.caption(
-        "Brasil, 2022. De cada 100 eleitores de uma categoria no 1º turno (linha), quantos "
-        "foram para cada categoria no 2º turno (coluna). É a média das zonas, ponderada pelos "
-        "eleitores. Outras UFs e 2018 estão na aba Dados."
+
+
+def escolher_uf(chave: str):
+    ufs = sorted(set(g.votos_municipio["uf"]))
+    return st.selectbox(
+        "Recorte",
+        [None, *ufs],
+        format_func=lambda uf: "Brasil inteiro" if uf is None else dados.NOMES_UF[uf],
+        key=chave,
     )
-    mostrar_matriz(2022, dados.UF_BRASIL)
+
+
+def mostrar_mapa(fig: go.Figure) -> None:
+    st.plotly_chart(fig, width="stretch", config={"scrollZoom": False, "displayModeBar": False})
+
+
+# ---------------------------------------------------------------- A virada
+with virada_aba:
+    st.markdown(
+        f"O Flávio Bolsonaro saiu do 1º turno com {milhoes(br['margem_1t'])} de votos a mais "
+        f"que o Lula. No 2º turno, o Lula venceu por {milhoes(br['margem_real'])}. Baixei do "
+        "TSE o boletim de todas as urnas do Brasil, que ficam abertos pra qualquer pessoa, "
+        "pra entender de onde vieram esses votos."
+    )
+    for coluna, lado in zip(st.columns(2), dados.LADOS, strict=True):
+        cartao(
+            COR[lado],
+            nomes[lado],
+            dados.pct(br[f"{lado}_2t"] / validos_2t),
+            f"{dados.inteiro(br[f'{lado}_2t'])} votos no 2º turno · "
+            f"{dados.inteiro(br[f'{lado}_1t'])} no 1º",
+            coluna,
+        )
+    st.caption("Votos válidos no território brasileiro. O exterior fica de fora de toda esta aba.")
+
+    # ------------------------------------------------ O contexto
+    st.subheader("Quase ninguém viu isso chegar")
+    pesquisas = ", ".join(
+        f"[{p.instituto}]({p.fonte}) {dados.pct(p.flavio)} a {dados.pct(p.lula)}"
+        for p in dados.PESQUISAS_2T
+    )
+    st.markdown(
+        "Na véspera do 2º turno, as principais pesquisas davam o Flávio na frente, dentro da "
+        f"margem de erro ({pesquisas}). Das pesquisas do 2º turno, "
+        f"[só duas]({dados.FONTE_PESQUISAS_LULA_NA_FRENTE}) mostraram o Lula na frente."
+    )
+
+    st.markdown(
+        "A minha projeção também não viu. Depois do 1º turno, comparei cada município com o "
+        "2º turno de 2022, só com os votos dos dois lados."
+    )
+    viradas_br = dados.resumo_viradas(g.viradas_resumo)
+    para_flavio, para_lula = viradas_br["lula_para_flavio"], viradas_br["flavio_para_lula"]
+    cartoes_viradas(viradas_br, "município", detalhes=False)
+    faixa = dados.faixa_brasil(g.projecao)
+    base = g.confronto.filter((pl.col("nivel") == "brasil") & (pl.col("cenario") == "base"))
+    acerto = {
+        r["nivel"]: r
+        for r in g.confronto_acerto.filter(pl.col("cenario") == "base").iter_rows(named=True)
+    }
+    situacao = {
+        r["grupo"]: r
+        for r in g.resumo.filter(pl.col("dimensao") == "situacao").iter_rows(named=True)
+    }
+    erro_sem_virar = sum(
+        situacao[s]["pct_erro_margem_base"] for s in ("lula_manteve", "flavio_manteve")
+    )
+    st.markdown(
+        f"**{dados.inteiro(para_flavio['viradas'])} municípios** que deram vitória ao Lula em "
+        f"2022 passaram a dar a frente ao Flávio, {caminho_contrario(para_lula)}. Daí projetei "
+        "o 2º turno supondo que cada grupo de eleitores faria o que fez em 2018 e 2022 (o "
+        "método está na aba Método). Deu Flávio na frente nos dois cenários, com o Lula entre "
+        f"{dados.pct(faixa['lula'][0])} e {dados.pct(faixa['lula'][1])}."
+    )
+    st.markdown(
+        f"A projeção acertou o vencedor em {acerto['uf']['acertos']} das "
+        f"{acerto['uf']['unidades']} UFs e em {dados.pct(acerto['municipio']['pct_acerto'])} "
+        f"dos municípios, mas errou a diferença nacional em "
+        f"{milhoes(br['erro_margem_base'])} de votos. Quase todo esse erro "
+        f"({dados.pct(erro_sem_virar)}) está em cidades onde o vencedor não mudou. O Lula "
+        "cresceu um pouco mais do que o previsto em quase todo lugar, e somado isso virou "
+        "a eleição."
+    )
+    st.caption(
+        f"{dados.AVISO} Erro da projeção no cenário base: "
+        f"{pontos(base['erro_pp'][0])} no Lula, em votos válidos."
+    )
+    with st.expander("Ver a projeção feita antes do 2º turno"):
+        cenario = st.radio(
+            "Cenário", ids_cenario, format_func=titulo_cenario, horizontal=True, key="cenario"
+        )
+        if cenario in dados.CENARIOS:
+            st.caption(dados.CENARIOS[cenario].suposicoes)
+        recorte = escolher_uf("uf_projecao")
+        mostrar_mapa(
+            mapa.figura(
+                dados.tabela_municipio(g.projecao, g.municipio_ibge, cenario, recorte),
+                malha_municipio(recorte),
+                chave="cd_ibge",
+                rotulo="nome",
+                nomes=nomes,
+            )
+        )
+        st.markdown(texto_backtest())
+
+    # ------------------------------------------------ A virada
+    st.subheader("De onde veio a virada")
+    st.markdown(
+        f"Do 1º pro 2º turno, o Lula ganhou {milhoes(br['delta_lula'])} de votos e o Flávio, "
+        f"{milhoes(br['delta_flavio'])}. Os dois cresceram, porque mais de "
+        f"{decimal(br['outros_1t'] / 1e6)} milhões de pessoas tinham votado em outros "
+        "candidatos e precisaram escolher, e porque muita gente que tinha votado em branco, "
+        "nulo ou nem foi votar apareceu no 2º turno. Mas o Lula levou bem mais desses votos, "
+        f"e a diferença entre os dois andou {milhoes(br['virada'])} de votos pro lado dele."
+    )
+    transf = dados.transferencia_comparada(g.comparacao_transferencia)
+    abst = transf.filter(pl.col("origem") == "Abstenção").row(0, named=True)
+    st.markdown(
+        "Refiz pra 2026 a mesma conta de transferência que fiz com 2022, agora com as urnas "
+        "do 2º turno. Quem votou no Lula ou no Flávio no 1º turno quase sempre repetiu o "
+        "voto, como em 2022. A mudança veio de quem não tinha escolhido ninguém. De cada 100 "
+        f"pessoas que não foram votar no 1º turno, {decimal(abst['lula_2026'] * 100)} votaram "
+        f"no Lula no 2º. Em 2022 tinham sido {decimal(abst['lula_2022'] * 100)}."
+    )
+    st.dataframe(
+        transf.with_columns(pl.exclude("origem") * 100),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "origem": "No 1º turno votou em",
+            **{
+                f"{lado}_{ano}": st.column_config.ProgressColumn(
+                    f"{nomes[lado].split(' (')[0]}, {ano}",
+                    format="%.1f%%",
+                    min_value=0,
+                    max_value=100,
+                    color=COR[lado],
+                )
+                for lado in dados.LADOS
+                for ano in (2022, 2026)
+            },
+        },
+    )
+    st.caption(
+        "De cada 100 eleitores do grupo no 1º turno, quantos votaram em cada lado no 2º. É "
+        "uma estimativa a partir do saldo das seções de cada zona, não o voto de cada pessoa. "
+        "O resto de cada linha foi pra branco, nulo ou abstenção. Em 2022 os lados são Lula "
+        "e Jair Bolsonaro."
+    )
+
+    # ------------------------------------------------ O Brasil todo
+    st.subheader("Não foi só o Nordeste")
+    vm = g.votos_municipio
+    cresceu = vm.filter(pl.col("delta_lula") > 0).height
+    cresceu_mais = vm.filter(pl.col("virada") > 0).height
+    flavio_venceu = dados.linha_resumo(g.resumo, "situacao", "flavio_manteve")
+    st.markdown(
+        "No mapa por estado, o Nordeste fica vermelho e quase todo o resto azul, e parece que "
+        "o Nordeste elegeu o Lula sozinho. Os boletins contam outra história. O Lula ganhou "
+        f"votos em {dados.inteiro(cresceu)} dos {dados.inteiro(vm.height)} municípios e "
+        f"cresceu mais que o Flávio em {dados.inteiro(cresceu_mais)}."
+    )
+    st.caption(
+        "Quanto o Lula tirou da diferença entre os dois do 1º pro 2º turno, a cada 100 "
+        "eleitores do município. Vermelho onde o Lula cresceu mais que o Flávio, azul onde "
+        "foi o contrário."
+    )
+    coluna_uf, coluna_filtro = st.columns(2)
+    with coluna_uf:
+        recorte = escolher_uf("uf_virada")
+    so_flavio = coluna_filtro.toggle(
+        "Só os municípios que o Flávio venceu no 2º turno", key="so_flavio"
+    )
+    mostrar_mapa(
+        mapa.figura_virada(
+            dados.mapa_virada(vm, recorte), malha_municipio(recorte), so_flavio=so_flavio
+        )
+    )
+    st.markdown(
+        f"Nas {dados.inteiro(flavio_venceu['municipios'])} cidades em que o Flávio venceu os "
+        "dois turnos, o Lula perdeu, mas encurtou a distância em "
+        f"{milhoes(flavio_venceu['virada'])} de votos. São "
+        f"{dados.pct(flavio_venceu['pct_virada'], 0)} da virada inteira, vinda de lugares "
+        "onde ele continuou perdendo."
+    )
+    regioes = dados.tabela_virada(g.resumo, "regiao", dados.NOMES_REGIAO)
+    ne = dados.linha_resumo(g.resumo, "regiao", "NE")
+    sudeste = dados.linha_resumo(g.resumo, "regiao", "SE")
+    norte = dados.linha_resumo(g.resumo, "regiao", "N")
+    sem_ne = br["margem_real"] - ne["virada"]
+    st.markdown(
+        f"O Nordeste pesou mais que o tamanho dele. Tem {dados.pct(ne['pct_aptos_2t'], 0)} "
+        f"dos eleitores e deu {dados.pct(ne['pct_virada'], 0)} da virada. Mas, se a "
+        "diferença entre os dois no Nordeste tivesse ficado igual à do 1º turno, o Lula "
+        f"ainda venceria, por {milhoes(sem_ne)} de votos. O Sudeste virou "
+        f"{milhoes(sudeste['virada'])}, mais que o Nordeste ({milhoes(ne['virada'])}). E no "
+        f"Norte o Lula saiu de {dados.inteiro(abs(norte['margem_1t']) / 1e3)} mil votos atrás pra "
+        f"uma vitória por {dados.inteiro(norte['margem_real'])} votos."
+    )
+    config_virada = {
+        "municipios": st.column_config.NumberColumn("Municípios", format="localized"),
+        "pct_aptos": st.column_config.NumberColumn("Eleitores (% do Brasil)", format="%.0f%%"),
+        "virada": st.column_config.NumberColumn("Virada (votos)", format="localized"),
+        "pct_virada": st.column_config.ProgressColumn(
+            "Parte da virada", format="%.0f%%", min_value=0, max_value=100, color=COR["lula"]
+        ),
+        "virada_100": st.column_config.NumberColumn("Virada a cada 100 eleitores", format="%.1f"),
+    }
+    st.dataframe(
+        regioes.select("nome", "pct_aptos", "pct_virada", "virada", "virada_100").with_columns(
+            pl.col("pct_aptos", "pct_virada") * 100
+        ),
+        hide_index=True,
+        width="stretch",
+        column_config={"nome": "Região", **config_virada},
+    )
+    st.caption("A virada é quanto a diferença Lula − Flávio andou do 1º pro 2º turno, em votos.")
+
+    # ------------------------------------------------ Capitais e interior
+    st.subheader("As capitais e o entorno delas viraram mais")
+    recortes = dados.tabela_virada(g.resumo, "recorte_faixa", dados.NOMES_RECORTE)
+    por_recorte = {
+        r["grupo"]: r
+        for r in g.resumo.filter(pl.col("dimensao") == "recorte").iter_rows(named=True)
+    }
+    pequenas = dados.linha_resumo(g.resumo, "recorte_faixa", "interior/ate_10mil")
+
+    def por_100(r: dict) -> str:
+        return decimal(r["virada"] / r["aptos_2t"] * 100)
+
+    st.markdown(
+        "Dizem que a virada veio das capitais e das periferias delas, mais do que das "
+        "cidades pequenas do interior. Os números apontam pra isso. A cada 100 eleitores, o "
+        f"Lula tirou {por_100(por_recorte['capital'])} votos da diferença nas capitais e "
+        f"{por_100(por_recorte['entorno_capital'])} nas outras cidades da região "
+        f"metropolitana delas. No interior foram {por_100(por_recorte['interior'])}, e nas "
+        f"cidades com até 10 mil eleitores, {por_100(pequenas)}. Como o interior tem "
+        f"{dados.pct(por_recorte['interior']['pct_aptos_2t'], 0)} dos eleitores, ele ainda "
+        f"respondeu por {dados.pct(por_recorte['interior']['pct_virada'], 0)} da virada."
+    )
+    st.dataframe(
+        recortes.select("nome", "municipios", "pct_aptos", "pct_virada", "virada_100").with_columns(
+            pl.col("pct_aptos", "pct_virada") * 100
+        ),
+        hide_index=True,
+        width="stretch",
+        column_config={"nome": "Tipo de cidade", **config_virada},
+    )
+    st.caption(
+        "As regiões metropolitanas são as da lista oficial do IBGE (2025) que contêm uma "
+        "capital, com a RIDE no caso de Brasília e Teresina. Campo Grande e Rio Branco não "
+        "têm região metropolitana. O tamanho é pelos eleitores aptos do 2º turno. A periferia "
+        "dentro de cada capital precisa de uma análise por zona eleitoral, que ainda não fiz."
+    )
+
+    # ------------------------------------------------ Os mapas
+    st.subheader("A virada no mapa")
+    st.markdown(
+        "O fundo é o resultado do 2º turno, vermelho onde o Lula venceu e azul onde o Flávio "
+        "venceu. Por cima, três cores marcam os municípios que trocaram de lado desde 2022."
+    )
+    contagem = {
+        r["grupo"]: r["municipios"]
+        for r in g.resumo.filter(pl.col("dimensao") == "cor_mapa").iter_rows(named=True)
+    }
+    for coluna, (cor, descricao) in zip(st.columns(3), dados.TRAJETORIAS_MAPA.items(), strict=True):
+        cartao(
+            mapa.COR_TRAJETORIA[cor],
+            descricao,
+            f"{dados.inteiro(contagem.get(cor, 0))} municípios",
+            "",
+            coluna,
+        )
+    recorte = escolher_uf("uf_trajetoria")
+    mostrar_mapa(
+        mapa.figura_trajetoria(
+            dados.mapa_2o_turno(vm, recorte),
+            malha_municipio(recorte),
+            nomes=nomes,
+            trajetorias=dados.TRAJETORIAS_MAPA,
+        )
+    )
+
+    st.subheader("Mais gente foi votar no 2º turno")
+    nao_voto = {
+        t: (br[f"abstencao_{t}"] + br[f"branco_{t}"] + br[f"nulo_{t}"]) / br[f"aptos_{t}"]
+        for t in ("1t", "2t")
+    }
+    caiu = vm.filter(pl.col("var_nao_voto") < 0).height
+    subiu_norte = vm.filter((pl.col("var_nao_voto") >= 0) & (pl.col("regiao") == "N")).height
+    st.markdown(
+        "Somando abstenção, brancos e nulos, o não-voto caiu de "
+        f"{dados.pct(nao_voto['1t'])} pra {dados.pct(nao_voto['2t'])} dos eleitores, e caiu "
+        f"em {dados.inteiro(caiu)} municípios. Quanto mais escuro o amarelo, mais ele caiu. "
+        f"Em cinza ficam as {dados.inteiro(vm.height - caiu)} cidades onde ele subiu ou "
+        f"ficou igual, {dados.inteiro(subiu_norte)} delas no Norte."
+    )
+    recorte = escolher_uf("uf_nao_voto")
+    mostrar_mapa(mapa.figura_nao_voto(dados.mapa_nao_voto(vm, recorte), malha_municipio(recorte)))
+    abstencao, branco_nulo = st.columns(2)
+    for coluna, titulo, chaves in (
+        (abstencao, "Abstenção", ("abstencao",)),
+        (branco_nulo, "Brancos e nulos", ("branco", "nulo")),
+    ):
+        antes = sum(br[f"{c}_1t"] for c in chaves)
+        depois = sum(br[f"{c}_2t"] for c in chaves)
+        coluna.metric(
+            titulo,
+            dados.pct(depois / br["aptos_2t"]),
+            pontos((depois / br["aptos_2t"] - antes / br["aptos_1t"]) * 100),
+            delta_color="inverse",
+            help=f"{dados.pct(antes / br['aptos_1t'])} no 1º turno. "
+            f"{dados.inteiro(antes - depois)} pessoas a menos. Em % dos eleitores aptos.",
+        )
+    st.markdown(
+        "O comparecimento ajudou, mas não explica tudo sozinho. As cidades onde mais gente "
+        "voltou a votar não são exatamente as que mais viraram, e a relação entre os dois "
+        "mapas existe, mas é fraca."
+    )
     rodape()
 
 # ---------------------------------------------------------------- Dados

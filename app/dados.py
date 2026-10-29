@@ -88,6 +88,12 @@ class Gold:
     viradas: pl.DataFrame
     viradas_resumo: pl.DataFrame
     primeiro_turno: pl.DataFrame
+    # O 2º turno real de 2026, só no território brasileiro.
+    votos_municipio: pl.DataFrame
+    resumo: pl.DataFrame
+    confronto: pl.DataFrame
+    confronto_acerto: pl.DataFrame
+    comparacao_transferencia: pl.DataFrame
 
 
 def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
@@ -120,6 +126,13 @@ def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
         viradas=pl.read_parquet(dir_gold / "viradas_municipio.parquet"),
         viradas_resumo=pl.read_parquet(dir_gold / "viradas_municipio_resumo.parquet"),
         primeiro_turno=pl.read_parquet(dir_gold / "primeiro_turno_2026.parquet"),
+        votos_municipio=pl.read_parquet(dir_gold / "votos_municipio_2026.parquet"),
+        resumo=pl.read_parquet(dir_gold / "resumo_2026.parquet"),
+        confronto=pl.read_parquet(dir_gold / "confronto_2026.parquet"),
+        confronto_acerto=pl.read_parquet(dir_gold / "confronto_2026_acerto.parquet"),
+        comparacao_transferencia=pl.read_parquet(
+            dir_gold / "comparacao_transferencia_2026.parquet"
+        ),
     )
 
 
@@ -446,3 +459,157 @@ def pct(fracao: float, casas: int = 1) -> str:
 def inteiro(n: float) -> str:
     """Formata um número com separador de milhar brasileiro: 1234567 → "1.234.567"."""
     return f"{round(n):,}".replace(",", ".")
+
+
+@dataclass(frozen=True)
+class Pesquisa:
+    instituto: str
+    lula: float  # fração dos votos válidos
+    flavio: float
+    fonte: str
+
+
+# As últimas pesquisas antes do 2º turno de 2026, em votos válidos, como noticiadas.
+PESQUISAS_2T = [
+    Pesquisa(
+        "Datafolha",
+        0.49,
+        0.51,
+        "https://www.cnnbrasil.com.br/eleicoes/ultimas-pesquisas-segundo-turno-eleicao/",
+    ),
+    Pesquisa(
+        "Quaest",
+        0.49,
+        0.51,
+        "https://www.cnnbrasil.com.br/eleicoes/ultimas-pesquisas-segundo-turno-eleicao/",
+    ),
+    Pesquisa(
+        "AtlasIntel",
+        0.492,
+        0.508,
+        "https://www.tribunapr.com.br/eleicoes/2026/flavio-bolsonaro-e-lula-empatam-tecnicamente"
+        "-a-vespera-do-2o-turno-aponta-atlasintel/amp/",
+    ),
+]
+FONTE_PESQUISAS_LULA_NA_FRENTE = (
+    "https://www.opovo.com.br/noticias/politica/eleicoes/2026/10/28/"
+    "eleicoes-apenas-duas-pesquisas-mostraram-lula-na-frente.html"
+)
+
+NOMES_REGIAO = {
+    "N": "Norte",
+    "NE": "Nordeste",
+    "CO": "Centro-Oeste",
+    "SE": "Sudeste",
+    "S": "Sul",
+}
+NOMES_RECORTE = {
+    "capital": "Capitais",
+    "entorno_capital": "Outras cidades da região metropolitana da capital",
+    "interior/acima_de_1mi": "Interior, acima de 1 milhão de eleitores",
+    "interior/200mil_a_1mi": "Interior, de 200 mil a 1 milhão de eleitores",
+    "interior/50mil_a_200mil": "Interior, de 50 mil a 200 mil eleitores",
+    "interior/10mil_a_50mil": "Interior, de 10 mil a 50 mil eleitores",
+    "interior/ate_10mil": "Interior, até 10 mil eleitores",
+    "interior": "Interior",
+}
+# As trajetórias do lado na frente que o mapa do 2º turno pinta por cima da gradação.
+TRAJETORIAS_MAPA = {
+    "roxo": "Lula em 2022, Flávio no 1º e no 2º turno de 2026",
+    "especial": "Lula em 2022, Flávio no 1º turno, de volta ao Lula no 2º",
+    "vermelho": "Flávio em 2022 e no 1º turno, Lula no 2º",
+}
+
+
+def linha_resumo(resumo: pl.DataFrame, dimensao: str, grupo: str) -> dict:
+    """Uma linha do resumo do 2º turno de 2026 (`dimensao = 'brasil'` para o Brasil)."""
+    return resumo.filter((pl.col("dimensao") == dimensao) & (pl.col("grupo") == grupo)).row(
+        0, named=True
+    )
+
+
+def tabela_virada(resumo: pl.DataFrame, dimensao: str, nomes: dict[str, str]) -> pl.DataFrame:
+    """Uma linha por grupo da dimensão, na ordem de `nomes`: a parte dos eleitores, a parte
+    da virada e a virada a cada 100 eleitores aptos."""
+    ordem = {g: i for i, g in enumerate(nomes)}
+    return (
+        resumo.filter((pl.col("dimensao") == dimensao) & pl.col("grupo").is_in(list(nomes)))
+        .sort(pl.col("grupo").replace_strict(ordem))
+        .select(
+            pl.col("grupo").replace_strict(nomes).alias("nome"),
+            "municipios",
+            pl.col("pct_aptos_2t").alias("pct_aptos"),
+            "virada",
+            "pct_virada",
+            (pl.col("virada") / pl.col("aptos_2t") * 100).alias("virada_100"),
+            pl.col("margem_1t"),
+            pl.col("margem_real").alias("margem_2t"),
+        )
+    )
+
+
+def transferencia_comparada(comparacao: pl.DataFrame) -> pl.DataFrame:
+    """No Brasil, de cada grupo do 1º turno, a fração que foi para cada lado em 2022 e em
+    2026."""
+    ordem = {k: i for i, k in enumerate((*LADOS, "outros", "branco", "nulo", "abstencao"))}
+    brasil = comparacao.filter((pl.col("nivel") == "brasil") & pl.col("j").is_in(LADOS))
+    return (
+        brasil.pivot(on="j", index="k", values=["beta_2022", "beta_2026"])
+        .sort(pl.col("k").replace_strict(ordem))
+        .select(
+            pl.col("k").replace_strict(ROTULOS_LINHA).alias("origem"),
+            pl.col("beta_2022_lula").alias("lula_2022"),
+            pl.col("beta_2026_lula").alias("lula_2026"),
+            pl.col("beta_2022_flavio").alias("flavio_2022"),
+            pl.col("beta_2026_flavio").alias("flavio_2026"),
+        )
+    )
+
+
+def _municipios(votos_municipio: pl.DataFrame, uf: str | None) -> pl.DataFrame:
+    if uf is not None:
+        votos_municipio = votos_municipio.filter(pl.col("uf") == uf)
+    return votos_municipio.with_columns(
+        pl.col("cd_municipio_ibge").cast(pl.String).alias("cd_ibge"),
+        (
+            pl.col("nm_municipio").map_elements(nome_municipio, return_dtype=pl.String)
+            + " ("
+            + pl.col("uf")
+            + ")"
+        ).alias("nome"),
+    )
+
+
+def mapa_2o_turno(votos_municipio: pl.DataFrame, uf: str | None = None) -> pl.DataFrame:
+    """O 2º turno real por município, com a trajetória que o mapa pinta por cima."""
+    return _municipios(votos_municipio, uf).select(
+        "cd_ibge",
+        "nome",
+        pl.col("d_2t").alias("pct_lula_validos"),
+        (1 - pl.col("d_2t")).alias("pct_flavio_validos"),
+        "cor_mapa",
+    )
+
+
+def mapa_virada(votos_municipio: pl.DataFrame, uf: str | None = None) -> pl.DataFrame:
+    """Quanto a diferença Lula − Flávio andou do 1º para o 2º turno, a cada 100 aptos."""
+    return _municipios(votos_municipio, uf).select(
+        "cd_ibge",
+        "nome",
+        (pl.col("virada") / pl.col("aptos_2t") * 100).alias("virada_100"),
+        "delta_lula",
+        "delta_flavio",
+        "vencedor_2t",
+    )
+
+
+def mapa_nao_voto(votos_municipio: pl.DataFrame, uf: str | None = None) -> pl.DataFrame:
+    """Quanto abstenção, brancos e nulos caíram do 1º para o 2º turno, em pontos dos aptos
+    (positivo quando caiu)."""
+    return _municipios(votos_municipio, uf).select(
+        "cd_ibge",
+        "nome",
+        (-pl.col("var_nao_voto") * 100).alias("queda_pp"),
+        (-pl.col("var_abstencao") * 100).alias("queda_abstencao_pp"),
+        (-pl.col("var_branco_nulo") * 100).alias("queda_branco_nulo_pp"),
+    )
