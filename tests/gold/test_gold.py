@@ -706,9 +706,21 @@ def test_votos_por_municipio_trazem_a_trajetoria_a_cor_do_mapa_e_os_limites(gold
     assert (jordao["flavio_para_lula_min"], jordao["flavio_para_lula_max"]) == (40, 90)
     assert jordao["d_2t"] == pytest.approx(90 / 190)
     assert jordao["cd_municipio_ibge"] == 1200328
+    assert (jordao["regiao"], jordao["recorte"], jordao["recorte_metropolitano"]) == (
+        "N",
+        "interior",
+        None,
+    )
+    assert jordao["virada"] == 100
     for m in municipios.values():
         assert m["delta_lula"] + m["delta_flavio"] == m["liberado"] + m["delta_aptos"]
         assert m["lula_projetado_base"] is not None
+        assert m["virada"] == m["delta_lula"] - m["delta_flavio"]
+        nao_voto = [m[f"{c}_{t}"] for t in ("1t", "2t") for c in ("abstencao", "branco", "nulo")]
+        assert m["var_abstencao"] + m["var_branco_nulo"] == pytest.approx(m["var_nao_voto"])
+        assert m["var_nao_voto"] == pytest.approx(
+            sum(nao_voto[3:]) / m["aptos_2t"] - sum(nao_voto[:3]) / m["aptos_1t"]
+        )
 
 
 def test_fluxo_reparte_o_1o_turno_e_o_residuo_fecha_o_2o_turno_real(gold_2026):
@@ -734,6 +746,9 @@ def test_resumo_soma_os_municipios_em_cada_dimensao(gold_2026):
         "cor_mapa",
         "trajetoria",
         "faixa_aptos",
+        "regiao",
+        "recorte",
+        "recorte_faixa",
     }
     [brasil] = [r for r in resumo if r["dimensao"] == "brasil"]
     assert brasil["municipios"] == len(municipios)
@@ -746,6 +761,7 @@ def test_resumo_soma_os_municipios_em_cada_dimensao(gold_2026):
         grupos = [r for r in resumo if r["dimensao"] == dimensao]
         assert sum(r["municipios"] for r in grupos) == len(municipios)
         assert sum(r["pct_delta_lula"] for r in grupos) == pytest.approx(1)
+        assert sum(r["virada"] for r in grupos) == brasil["virada"]
     [roxo] = [r for r in resumo if (r["dimensao"], r["grupo"]) == ("cor_mapa", "roxo")]
     roxos = [m for m in municipios if m["cor_mapa"] == "roxo"]
     assert 1058 in {m["cd_municipio"] for m in roxos}

@@ -33,6 +33,19 @@ CORRESPONDENCIA_IBGE = Path(__file__).parent / "municipios_tse_ibge.csv"
 # Municípios instalados depois da fonte acima: (uf, código TSE, código IBGE). O código IBGE
 # vem de https://servicodados.ibge.gov.br/api/v1/localidades/estados/MT/municipios.
 MUNICIPIOS_NOVOS = [("MT", 73709, 5101837)]  # Boa Esperança do Norte, instalado em 2025
+# Os municípios das regiões metropolitanas (ou RIDEs) que contêm uma capital, tirados de
+# https://geoftp.ibge.gov.br/organizacao_do_territorio/estrutura_territorial/
+# municipios_por_regioes_metropolitanas/Situacao_2020a2029/Composicao_RM_2025.xlsx. Quando a
+# RM separa o núcleo metropolitano da área de expansão (Florianópolis), entra só o núcleo.
+# Campo Grande e Rio Branco não têm RM e ficam só como capital.
+RECORTES_METROPOLITANOS = Path(__file__).parent / "recortes_metropolitanos.csv"
+REGIOES = {
+    "N": ("AC", "AP", "AM", "PA", "RO", "RR", "TO"),
+    "NE": ("AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"),
+    "CO": ("DF", "GO", "MT", "MS"),
+    "SE": ("ES", "MG", "RJ", "SP"),
+    "S": ("PR", "RS", "SC"),
+}
 # Pesquisas de 2022 com cruzamento 1º × 2º turno, curadas dos relatórios originais
 # (vox-urna.md, "Avaliação do método"), e o nome no BU de cada candidato de "outros" delas.
 REFERENCIA_EXTERNA = Path(__file__).parent / "referencia_externa.csv"
@@ -674,7 +687,8 @@ def _municipio_ibge(con: duckdb.DuckDBPyConnection) -> None:
     con.execute(
         """
         create table _correspondencia as
-        select uf, codigo_tse as cd_municipio_tse, codigo_ibge as cd_municipio_ibge
+        select uf, codigo_tse as cd_municipio_tse, codigo_ibge as cd_municipio_ibge,
+               capital = 1 as capital
         from read_csv($csv, header = true, columns = {
             'codigo_tse': 'integer', 'uf': 'varchar', 'nome_municipio': 'varchar',
             'capital': 'integer', 'codigo_ibge': 'integer'
@@ -682,19 +696,49 @@ def _municipio_ibge(con: duckdb.DuckDBPyConnection) -> None:
         """,
         {"csv": str(CORRESPONDENCIA_IBGE)},
     )
-    con.executemany("insert into _correspondencia values (?, ?, ?)", MUNICIPIOS_NOVOS)
+    con.executemany("insert into _correspondencia values (?, ?, ?, false)", MUNICIPIOS_NOVOS)
+    con.execute(
+        """
+        create table _recorte_metropolitano as
+        select codigo_ibge as cd_municipio_ibge, recorte_metropolitano
+        from read_csv($csv, header = true, columns = {
+            'codigo_ibge': 'integer', 'recorte_metropolitano': 'varchar'
+        })
+        """,
+        {"csv": str(RECORTES_METROPOLITANOS)},
+    )
+    con.register(
+        "_regiao",
+        {
+            "uf": np.array([uf for ufs in REGIOES.values() for uf in ufs]),
+            "regiao": np.array([r for r, ufs in REGIOES.items() for _ in ufs]),
+        },
+    )
     con.execute(
         f"""
         create table municipio_ibge as
-        select m.uf, m.cd_municipio as cd_municipio_tse, c.cd_municipio_ibge, m.nm_municipio
+        select m.uf, m.cd_municipio as cd_municipio_tse, c.cd_municipio_ibge, m.nm_municipio,
+               r.regiao,
+               case when c.capital then 'capital'
+                    when rm.cd_municipio_ibge is not null then 'entorno_capital'
+                    else 'interior' end as recorte,
+               rm.recorte_metropolitano
         from (
             select uf, cd_municipio, any_value(nm_municipio) as nm_municipio
             from categorias where ano = {ANO_ALVO} and turno = 1 and uf <> 'ZZ'
             group by all
         ) m
         left join _correspondencia c on c.uf = m.uf and c.cd_municipio_tse = m.cd_municipio
+        left join _recorte_metropolitano rm using (cd_municipio_ibge)
+        left join _regiao r on r.uf = m.uf
         """
     )
+    fora = con.execute(
+        "select cd_municipio_ibge from _recorte_metropolitano "
+        "except select cd_municipio_ibge from _correspondencia order by all"
+    ).fetchall()
+    if fora:
+        raise GoldInconsistente(f"recorte metropolitano com código IBGE desconhecido: {fora}")
     sem_par = con.execute(
         "select uf, cd_municipio_tse, nm_municipio from municipio_ibge "
         "where cd_municipio_ibge is null order by all"
@@ -903,6 +947,10 @@ def _votos_municipio(con: duckdb.DuckDBPyConnection) -> None:
     liberado + Δaptos. Os limites por seção não usam modelo: se o Flávio cai numa seção,
     pelo menos essa queda saiu dele; e de quem votou no Flávio no 1º turno, pelo menos
     max(0, flavio_1t + lula_2t − aptos) votou no Lula no 2º.
+
+    `virada` é quanto a diferença Lula − Flávio andou do 1º para o 2º turno (Δlula − Δflavio).
+    As colunas `var_*` são a variação, em fração dos aptos, da abstenção, de brancos + nulos
+    e das três juntas (o não-voto).
     """
     soma = ", ".join(f"sum({k}) as {k}" for k in K)
     turnos = f"(({ANO_BASE}, 2), ({ANO_ALVO}, 1), ({ANO_ALVO}, 2))"
@@ -965,7 +1013,14 @@ def _votos_municipio(con: duckdb.DuckDBPyConnection) -> None:
                 using (uf, cd_municipio)
             left join (select * from turno where ano = {ANO_BASE}) t0 using (uf, cd_municipio)
         )
-        select u.uf, u.cd_municipio, i.cd_municipio_ibge, u.* exclude (uf, cd_municipio),
+        select u.uf, u.cd_municipio, i.cd_municipio_ibge, i.regiao, i.recorte,
+               i.recorte_metropolitano, u.* exclude (uf, cd_municipio),
+               u.delta_lula - u.delta_flavio as virada,
+               u.abstencao_2t / u.aptos_2t - u.abstencao_1t / u.aptos_1t as var_abstencao,
+               (u.branco_2t + u.nulo_2t) / u.aptos_2t - (u.branco_1t + u.nulo_1t) / u.aptos_1t
+                   as var_branco_nulo,
+               (u.abstencao_2t + u.branco_2t + u.nulo_2t) / u.aptos_2t
+                   - (u.abstencao_1t + u.branco_1t + u.nulo_1t) / u.aptos_1t as var_nao_voto,
                coalesce(u.vencedor_{ANO_BASE}, 'sem_{ANO_BASE}') || '/' || u.lider_1t || '/'
                    || u.vencedor_2t as trajetoria,
                case when (u.lider_1t, u.vencedor_2t) = ('flavio', 'lula') then 'virou_para_lula'
@@ -1065,7 +1120,9 @@ def _resumo_2026(con: duckdb.DuckDBPyConnection) -> None:
     """Somas de `votos_municipio` e de `fluxo_municipio` por grupo de municípios.
 
     Cada `dimensao` cobre os municípios brasileiros uma vez: `brasil`, `uf`, `situacao`,
-    `cor_mapa` (`gradacao` para os que ficam só na gradação), `trajetoria` e `faixa_aptos`.
+    `cor_mapa` (`gradacao` para os que ficam só na gradação), `trajetoria`, `faixa_aptos`,
+    `regiao`, `recorte` (capital, entorno da capital ou interior) e `recorte_faixa` (o
+    interior partido pela faixa de aptos).
     As colunas `pct_*` são a parte do grupo no total da dimensão.
     """
     dimensoes = {
@@ -1075,6 +1132,10 @@ def _resumo_2026(con: duckdb.DuckDBPyConnection) -> None:
         "cor_mapa": "coalesce(cor_mapa, 'gradacao')",
         "trajetoria": "trajetoria",
         "faixa_aptos": "faixa_aptos",
+        "regiao": "regiao",
+        "recorte": "recorte",
+        "recorte_faixa": "case when recorte = 'interior' then 'interior/' || faixa_aptos "
+        "else recorte end",
     }
     con.execute(
         "create table _grupo_municipio as "
@@ -1088,7 +1149,7 @@ def _resumo_2026(con: duckdb.DuckDBPyConnection) -> None:
         for (c,) in con.execute(
             "select column_name from duckdb_columns() where table_name = 'votos_municipio' "
             "and data_type in ('BIGINT', 'HUGEINT', 'DOUBLE', 'INTEGER') "
-            "and not starts_with(column_name, 'd_') "
+            "and not starts_with(column_name, 'd_') and not starts_with(column_name, 'var_') "
             "and column_name not in ('cd_municipio', 'cd_municipio_ibge') order by column_index"
         ).fetchall()
     ]
@@ -1101,7 +1162,7 @@ def _resumo_2026(con: duckdb.DuckDBPyConnection) -> None:
     )
     pct = ", ".join(
         f"{c} / sum({c}) over (partition by dimensao) as pct_{c}"
-        for c in ("aptos_2t", "delta_lula", "delta_flavio", "margem_real")
+        for c in ("aptos_2t", "delta_lula", "delta_flavio", "margem_real", "virada")
     )
     erros = ", ".join(
         f"margem_projetada_{c} - margem_real as erro_margem_{c}, "
