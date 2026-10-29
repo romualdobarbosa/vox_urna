@@ -16,7 +16,7 @@ Vocabulário: [GLOSSARY.md](GLOSSARY.md). Decisões de arquitetura: [docs/adr/](
 - Cargo **Presidente** apenas.
 - 2018: 1º e 2º turno, por seção. Servem para calibrar o cenário de sensibilidade de "outros" e para o backtest.
 - 2022: 1º e 2º turno, por seção. Fonte do β do cenário base.
-- 2026: 1º turno por seção. O 2º turno é ingerido depois de 25/10, para o confronto.
+- 2026: 1º turno por seção. O 2º turno é ingerido depois de 25/10, para o confronto, pelos arquivos de urna do site de resultados, porque o CKAN demorou a publicar.
 - 2026, os dois turnos, também pelos resultados divulgados (JSON por Brasil, UF e município). É uma segunda fonte, que sai na noite da eleição, dias antes dos BUs do CKAN.
 - Exterior incluído no modelo e nos totais, como uma zona a mais.
 - Backtest 2018 → 2022, estabilidade da transferência entre 2018 e 2022 e referência externa (pesquisas de 2022), descritos em "Avaliação do método".
@@ -49,7 +49,12 @@ Diferenças por ano, que o silver normaliza:
 - `ele2026/{eleicao}/dados/{uf}/{uf}{municipio}-c0001-e{eleicao}-u.json`, e os equivalentes de UF (`{uf}-c0001-…`) e Brasil (`br-c0001-…`): eleitorado, aptos das seções apuradas, comparecimento, abstenção, válidos, brancos, nulos, nulos técnicos e os votos de cada candidato. Não há arquivo por zona nem por seção.
 - Diferenças em relação ao BU: o JSON separa os **nulos técnicos** (votos em candidato com registro indeferido, que o TSE soma aos nulos e o BU conta como nominais), e o eleitorado inclui as seções não instaladas.
 
-Também existe o arquivo de cada urna (`arquivo-urna/`), com o BU binário em ASN.1 (especificação EA17, decodificado pelo https://github.com/doccaz/urnas-br). Não é usado: seriam cerca de 1 milhão de requisições para adiantar em um ou dois dias o que o CKAN publica em CSV.
+**Arquivos de urna** (`resultados.tse.jus.br/oficial/ele{ano}/arquivo-urna/{pleito}/`), o BU de cada seção como saiu da urna, publicado na noite da eleição. É a mesma granularidade do bweb do CKAN. Usado em 2026/2 (pleito `3221`), porque três dias depois da eleição o CKAN ainda não tinha o turno:
+- `config/{uf}/{uf}-p{pleito}-cs.json`: as seções de cada UF por município e zona (517.179 no Brasil em 2026/2). Uma seção agregada traz `nsp` (a principal) e não tem arquivo próprio; a principal lista as agregadas em `nsa`.
+- `dados/{uf}/{municipio}/{zona}/{secao}/p{pleito}-{uf}-m{municipio}-z{zona}-s{secao}-aux.json`: a situação da seção (`st`) e os hashes das urnas que geraram resultado ali, cada um com a sua situação e os seus arquivos (`bu`, `rdv`, `log`, `vota`, `imgbu`).
+- `{hash}/{nome}-bu.dat`: o BU binário, em ASN.1 (BER) dentro de um envelope genérico. A especificação é a do TSE (formato dos arquivos de BU, RDV e assinatura digital, v2), copiada em `src/vox_urna/bronze/asn1/bu.asn1`, e o site do TSE bloqueia o download automatizado dela. No exterior, onde se vota em cédula, algumas seções têm só o `busa` (BU do Sistema de Apuração), no mesmo formato.
+- O BU traz só os números de candidato e partido, sem nome e sem sigla, e não traz as seções agregadas.
+- O servidor anuncia limite de 5.000 req/s, mas com 32 conexões ele devolveu 429 em massa por ~10 min; com 16 não houve erro.
 
 ## Arquitetura (medallion)
 
@@ -73,15 +78,27 @@ Execução por CLI, um comando por camada (`vox-urna bronze --ano 2026 --turno 1
 - **Integridade:** não há `.sha512` oficial. O sha512 é calculado na chegada, e o JSON precisa ser da eleição, do turno e da abrangência pedidos e ter o cargo de Presidente; se não, fica `corrupted`. Se a totalização daquele arquivo ainda não for final (`tf`), fica `incomplete`. Nos dois casos o arquivo não vai para o disco e é baixado de novo no próximo run.
 - Idempotência, retry e `--force` como no bronze do CKAN. `--uf` baixa só as UFs pedidas, sem o Brasil.
 
+### Bronze: arquivos de urna
+`vox-urna bronze-urna --ano 2026 --turno 2` (`make bronze-urna`), a terceira ingestão. Fica fora do `make all`: são ~1 milhão de requisições, e o comando sai com erro enquanto houver seção sem BU (as não instaladas do exterior ficam assim para sempre).
+- Baixa a config de seções de cada UF, e para cada seção com BU próprio, o aux.json e o BU do hash escolhido. Pool de 16 threads; a thread principal grava o manifest a cada 2.000 seções e no fim.
+- **Hash escolhido:** o "Totalizado" mais recente; sem ele, o "Recebido" mais recente. Seções "Recebida" entram: o BU delas é o único publicado, chegou ao TSE na noite da eleição ou nos dias seguintes e soma, junto com as "Totalizada", exatamente o resultado divulgado (em 2026/2, 10.844 seções em 67 zonas e 135 municípios). A situação vai para o silver em `st_secao`. Do arquivo, o `bu`, ou o `busa` se não houver `bu`.
+- Um manifest por UF (`data/bronze/urna/ano=AAAA/turno=N/{UF}/manifest.csv`): `url` (a do aux.json), a seção, `hash`, `hashes` (quantos o aux.json lista; mais de um é urna trocada), `caminho, sha512, bytes, downloaded_at, status, tipo_bu, st_secao`.
+- Arquivos em `data/bronze/urna/ano=AAAA/turno=N/{UF}/{municipio}/` (aux.json e BU, com o nome original) e as configs em `.../config/`. 2026/2 ocupa 4,0 GB.
+- **Integridade:** não há `.sha512` oficial; o sha512 é calculado na chegada. O BU precisa decodificar e ser do pleito, do município, da zona e da seção pedidos; se não, fica `corrupted`. Seção sem BU válido (situação "Nao instalada", ou nenhum hash aceito) fica `incomplete`. Nos dois casos o BU não vai para o disco e é baixado de novo no próximo run.
+- Idempotência e retry como nos outros bronzes; `--uf` e `--workers` escolhem as UFs e o pool.
+- Em 2026/2: 499.207 seções com BU (488.334 Totalizada, 10.844 Recebida, 29 busa) e 41 não instaladas no exterior. ~5h de parede com o bloqueio no meio, ~1.050 s de CPU, até 564 MB de RAM.
+
 ### Silver
 - Lê cada zip **em streaming** (o 1º turno tem cerca de 32 GB descomprimido por eleição, com todos os cargos), mantém só as linhas de Presidente (`CD_CARGO_PERGUNTA = 1`; os textos mudam de capitalização entre anos), normaliza o cabeçalho por ano e converte para UTF-8. O DuckDB monta as tabelas. Tudo roda em cerca de 2 min.
 - Grava Parquet tipado em `data/silver/{tabela}/ano=AAAA/turno=N/`:
-  - `secao`: uma linha por seção, como o BU reporta (a seção principal já inclui as agregadas), com `uf, cd_municipio, nm_municipio, zona, secao, aptos, comparecimento, abstencao, branco, nulo, nominais, secoes_agregadas`.
+  - `secao`: uma linha por seção, como o BU reporta (a seção principal já inclui as agregadas), com `uf, cd_municipio, nm_municipio, zona, secao, aptos, comparecimento, abstencao, branco, nulo, nominais, secoes_agregadas, st_secao` (`st_secao` é a situação no site de resultados quando a fonte é o arquivo de urna, e nula no CKAN).
   - `votos`: votos nominais por seção e candidato (`nr_votavel, nm_votavel, sg_partido, votos`), com nome e partido reais.
   - `rejeitadas`: seções em quarentena e o motivo.
 - **Invariantes:** urna apurada (o TSE anula algumas urnas, cujos votos não entram na totalização); soma dos votos = comparecimento; aptos = comparecimento + abstenção; nenhuma seção duplicada; aptos e comparecimento constantes dentro da seção. Uma seção que viola uma invariante vai para quarentena, e o build só falha se as rejeitadas passarem de 0,1% ([ADR 0001](docs/adr/0001-quarentena-de-secoes-invalidas.md)).
-- **Idempotência:** `data/silver/_construcao.json` guarda os sha512 do bronze usados em cada turno. O turno só é reconstruído se o bronze mudar ou com `--force`.
-- **Conferência com o resultado oficial:** os totais nacionais batem voto a voto (ex: 2022 2T, Lula 60.345.999 × Jair 58.206.354). Nos dados reais só caíram em quarentena urnas anuladas: 4 + 1 seções em 2018, 4 + 1 em 2022 e nenhuma em 2026.
+- **Fonte de cada turno:** o bweb do CKAN quando o manifest do CKAN tem o turno; se não, os arquivos de urna. O BU binário vira, por UF, um CSV no formato do bweb (`silver/urna.py`) e segue o mesmo caminho de quarentena e gravação. O nome e o partido dos candidatos vêm do silver `resultado_votos`, por isso o silver dos resultados divulgados roda antes. Um BU sem votável de Presidente (duas cidades do exterior em 2026/2, só com abstenção) não gera linha, como no bweb. Quando o CKAN publicar um turno, o silver passa a usá-lo sozinho; o CKAN não publica por partes, mas se publicasse, o turno passaria a ser o recorte do CKAN.
+- **Conferência entre fontes:** `construir_fonte` constrói um turno de uma fonte escolhida num silver à parte, e `silver/conferencia.py` compara dois silvers seção a seção. É para o BU binário × bweb de 2026/2 quando o CKAN publicar.
+- **Idempotência:** `data/silver/_construcao.json` guarda os sha512 do bronze usados em cada turno e a `fonte`. Nos arquivos de urna, ~500 mil BUs, guarda só o sha512 da lista ordenada. O turno só é reconstruído se o bronze mudar ou com `--force`. Uma coluna nova no `secao` pede `--force`, porque o gold lê as partições com o schema do primeiro arquivo.
+- **Conferência com o resultado oficial:** os totais nacionais batem voto a voto (ex: 2022 2T, Lula 60.345.999 × Jair 58.206.354). Nos dados reais só caíram em quarentena urnas anuladas: 4 + 1 seções em 2018, 4 + 1 em 2022 e nenhuma em 2026. Em 2026/2 (arquivos de urna), os 5.757 municípios batem com o resultado divulgado em aptos, comparecimento, brancos, nulos e votos de cada candidato, menos Ciudad Guayana (72 aptos) e Trípoli (30 aptos), que no divulgado só têm abstenção, o mesmo caso das 41 cidades do exterior no 1º turno. Território nacional: Lula 64.056.078 × Flávio 59.654.544; com o exterior, 64.256.232 × 59.826.041. O arquivo de urna não diz se a urna foi anulada, então essa invariante não se aplica a ele; em 2026/2 o divulgado tem 0 votos anulados.
 
 ### Silver: resultados divulgados
 O mesmo `vox-urna silver` constrói, a partir do bronze dos resultados, em `data/silver/{tabela}/ano=AAAA/turno=N/`:

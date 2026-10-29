@@ -5,6 +5,7 @@ description = "Pipeline medallion sobre os boletins de urna do TSE e projeção 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "asn1tools>=0.169.0",
     "duckdb>=1.5,<2",
     "numpy>=2,<3",
     "requests>=2.34.2",

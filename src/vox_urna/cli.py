@@ -7,6 +7,8 @@ from vox_urna.bronze.ingest import ingerir
 from vox_urna.bronze.manifest import Status
 from vox_urna.bronze.resultados import ANOS as ANOS_RESULTADOS
 from vox_urna.bronze.resultados import ingerir_resultados
+from vox_urna.bronze.urna import PLEITOS as PLEITOS_URNA
+from vox_urna.bronze.urna import ingerir_urna
 from vox_urna.gold.construcao import GoldInconsistente
 from vox_urna.gold.construcao import construir as construir_gold
 from vox_urna.silver.construcao import RejeicaoExcessiva, construir
@@ -47,6 +49,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     resultados.add_argument("--workers", type=int, default=4)
 
+    urna = sub.add_parser(
+        "bronze-urna",
+        help="baixa o BU de cada seção do site de resultados (arquivos de urna)",
+    )
+    urna.add_argument("--ano", type=int, default=2026, choices=sorted({a for a, _ in PLEITOS_URNA}))
+    urna.add_argument("--turno", type=int, default=2, choices=(1, 2))
+    urna.add_argument("--uf", nargs="+", help="ex: AC ZZ (padrão: todas)")
+    urna.add_argument(
+        "--force", action="store_true", help="baixa de novo mesmo o que já foi baixado"
+    )
+    urna.add_argument("--workers", type=int, default=16)
+
     silver = sub.add_parser("silver", help="filtra Presidente e gera as tabelas por seção")
     silver.add_argument(
         "--force", action="store_true", help="reconstrói mesmo o que não mudou no bronze"
@@ -68,6 +82,8 @@ def main(argv: list[str] | None = None) -> int:
         return _bronze(args)
     if args.camada == "bronze-resultados":
         return _bronze_resultados(args)
+    if args.camada == "bronze-urna":
+        return _bronze_urna(args)
     if args.camada == "silver":
         return _silver(args)
     return _gold(args)
@@ -100,16 +116,25 @@ def _bronze_resultados(args: argparse.Namespace) -> int:
     return 1 if any(resumo[status] for status in falhas) else 0
 
 
-def _silver(args: argparse.Namespace) -> int:
-    try:
-        resultados = construir(args.dados, force=args.force, workers=args.workers)
-    except RejeicaoExcessiva as erro:
-        print(f"silver abortado: {erro}", file=sys.stderr)
+def _bronze_urna(args: argparse.Namespace) -> int:
+    if (args.ano, args.turno) not in PLEITOS_URNA:
+        print(f"sem pleito conhecido para {args.ano}/{args.turno}", file=sys.stderr)
         return 1
-    for r in resultados:
-        estado = "pulado" if r.pulado else "construído"
-        print(f"{r.ano}/{r.turno}: {estado}, {r.secoes} seções, {r.rejeitadas} em quarentena")
+    resumo = ingerir_urna(
+        args.dados / "bronze" / "urna",
+        args.ano,
+        args.turno,
+        ufs=args.uf,
+        force=args.force,
+        workers=args.workers,
+    )
+    print(", ".join(f"{desfecho}: {n}" for desfecho, n in sorted(resumo.items())))
+    falhas = (Status.CORRUPTED, Status.FAILED, Status.INCOMPLETE)
+    return 1 if any(resumo[status] for status in falhas) else 0
 
+
+def _silver(args: argparse.Namespace) -> int:
+    # Os resultados divulgados vêm primeiro: o BU dos arquivos de urna tira deles os nomes.
     try:
         divulgados = construir_resultados(args.dados, force=args.force)
     except (ResultadoIncompleto, ResultadoInconsistente) as erro:
@@ -118,6 +143,18 @@ def _silver(args: argparse.Namespace) -> int:
     for r in divulgados:
         estado = "pulado" if r.pulado else "construído"
         print(f"resultados {r.ano}/{r.turno}: {estado}, {r.municipios} municípios")
+
+    try:
+        resultados = construir(args.dados, force=args.force, workers=args.workers)
+    except RejeicaoExcessiva as erro:
+        print(f"silver abortado: {erro}", file=sys.stderr)
+        return 1
+    for r in resultados:
+        estado = "pulado" if r.pulado else "construído"
+        print(
+            f"{r.ano}/{r.turno}: {estado} (fonte {r.fonte}), {r.secoes} seções, "
+            f"{r.rejeitadas} em quarentena"
+        )
     return 0
 
 

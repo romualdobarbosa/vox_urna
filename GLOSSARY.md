@@ -38,6 +38,14 @@ _Avoid_: ausentes, ausência, faltosos
 A contagem oficial de votos de uma seção num turno, publicada pelo TSE.
 _Avoid_: resultado da urna, apuração
 
+**Arquivo de urna**:
+O BU de uma seção em formato binário (ASN.1), publicado pelo TSE no site de resultados na noite da eleição, com os demais arquivos da urna. É o mesmo boletim que o CKAN publica depois em CSV (bweb). No exterior, onde se vota em cédula, o BU pode ser o do Sistema de Apuração (busa).
+_Avoid_: BU binário (quando o contexto não for o formato), imagem do BU
+
+**Situação da seção**:
+O estado da seção no site de resultados: "Totalizada" (o BU entrou na totalização e o site marcou), "Recebida" (o BU chegou ao TSE, mas o site não marcou como totalizado) ou "Nao instalada" (não houve votação). Neste projeto, Totalizada e Recebida entram.
+_Avoid_: status da urna, apuração
+
 **Resultado divulgado**:
 A totalização oficial que o TSE publica no site de resultados na noite da eleição, por Brasil, UF e município. Não chega à seção nem à zona. É uma fonte independente do BU para conferir os mesmos votos.
 _Avoid_: resultado oficial (sozinho), apuração, parcial

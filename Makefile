@@ -1,4 +1,4 @@
-.PHONY: all bronze bronze-resultados silver gold test lint dashboard figuras
+.PHONY: all bronze bronze-resultados bronze-urna silver gold test lint dashboard figuras
 
 all: gold
 
@@ -7,6 +7,10 @@ bronze:
 
 bronze-resultados:
 	uv run vox-urna bronze-resultados
+
+# Fora do `all`: ~1 milhão de requisições, e sai com erro enquanto houver seção sem BU.
+bronze-urna:
+	uv run vox-urna bronze-urna --ano 2026 --turno 2
 
 silver: bronze bronze-resultados
 	uv run vox-urna silver
