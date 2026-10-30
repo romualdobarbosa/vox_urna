@@ -13,8 +13,11 @@ DIR_GEO = Path(__file__).resolve().parent / "geo"
 COR = {"lula": "#C8102E", "flavio": "#1F4E9C"}
 NEUTRO = "#F2F2F2"
 CINZA = "#BDBDBD"
-# As trajetórias pintadas por cima do 2º turno (dados.TRAJETORIAS_MAPA).
-COR_TRAJETORIA = {"roxo": "#7B2D8E", "especial": "#1E9E6A", "vermelho": "#FF7A00"}
+# As trajetórias pintadas por cima do 2º turno (dados.TRAJETORIAS_MAPA). Têm a luminosidade
+# e a saturação do vermelho e do azul, com o matiz nos vãos entre eles (violeta entre os
+# dois, verde-azulado e âmbar do outro lado do círculo), e passam no validador de
+# daltonismo junto com eles: ΔE ≥ 12 entre qualquer par.
+COR_TRAJETORIA = {"roxo": "#A17ADF", "especial": "#00908A", "vermelho": "#CB7F00"}
 # Do amarelo claro ao ocre: quanto mais escuro, mais gente voltou a votar.
 AMARELO = [[0, "#FFF6C7"], [0.5, "#F2C200"], [1, "#7A5200"]]
 # Horizontal e embaixo, para não roubar largura do mapa no celular.
@@ -74,7 +77,7 @@ def figura(
             marker_line_color="white",
             text=dica,
             hovertemplate="%{text}<extra></extra>",
-            colorbar={"title": {"text": "p.p.", "side": "right"}, **BARRA},
+            colorbar={"title": {"text": "diferença em pontos", "side": "top"}, **BARRA},
         )
     )
     return _enquadrar(fig)
@@ -137,11 +140,10 @@ def figura_trajetoria(
     return fig
 
 
-def figura_virada(tabela: pl.DataFrame, geojson: dict, *, so_flavio: bool) -> go.Figure:
+def figura_virada(tabela: pl.DataFrame, geojson: dict) -> go.Figure:
     """Cada município por quanto a diferença Lula − Flávio andou, a cada 100 eleitores:
     vermelho onde o Lula cresceu mais, azul onde o Flávio cresceu mais.
 
-    Com `so_flavio`, só os municípios que o Flávio venceu no 2º turno ficam coloridos.
     `tabela` vem de `dados.mapa_virada`.
     """
     # O 98º percentil segura a escala, para os extremos não apagarem o resto do mapa.
@@ -158,26 +160,13 @@ def figura_virada(tabela: pl.DataFrame, geojson: dict, *, so_flavio: bool) -> go
             ).iter_rows()
         ]
 
-    destaque = tabela.filter(pl.col("vencedor_2t") == "flavio") if so_flavio else tabela
     fig = go.Figure()
-    if so_flavio:
-        resto = tabela.filter(pl.col("vencedor_2t") != "flavio")
-        fig.add_trace(
-            _camada(
-                resto,
-                geojson,
-                [0] * resto.height,
-                dica(resto),
-                colorscale=_uma_cor(NEUTRO),
-                showscale=False,
-            )
-        )
     fig.add_trace(
         _camada(
-            destaque,
+            tabela,
             geojson,
-            destaque["virada_100"].to_list(),
-            dica(destaque),
+            tabela["virada_100"].to_list(),
+            dica(tabela),
             zmin=-limite,
             zmax=limite,
             colorscale=[[0, COR["flavio"]], [0.5, NEUTRO], [1, COR["lula"]]],

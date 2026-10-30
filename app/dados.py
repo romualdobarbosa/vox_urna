@@ -93,7 +93,8 @@ class Gold:
     resumo: pl.DataFrame
     confronto: pl.DataFrame
     confronto_acerto: pl.DataFrame
-    comparacao_transferencia: pl.DataFrame
+    # Quantos votos de cada grupo do 1º turno foram para cada opção do 2º, por recorte.
+    fluxo_resumo: pl.DataFrame
 
 
 def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
@@ -130,9 +131,7 @@ def carregar(dir_gold: Path = DIR_GOLD) -> Gold:
         resumo=pl.read_parquet(dir_gold / "resumo_2026.parquet"),
         confronto=pl.read_parquet(dir_gold / "confronto_2026.parquet"),
         confronto_acerto=pl.read_parquet(dir_gold / "confronto_2026_acerto.parquet"),
-        comparacao_transferencia=pl.read_parquet(
-            dir_gold / "comparacao_transferencia_2026.parquet"
-        ),
+        fluxo_resumo=pl.read_parquet(dir_gold / "fluxo_resumo_2026.parquet"),
     )
 
 
@@ -548,22 +547,43 @@ def tabela_virada(resumo: pl.DataFrame, dimensao: str, nomes: dict[str, str]) ->
     )
 
 
-def transferencia_comparada(comparacao: pl.DataFrame) -> pl.DataFrame:
-    """No Brasil, de cada grupo do 1º turno, a fração que foi para cada lado em 2022 e em
-    2026."""
-    ordem = {k: i for i, k in enumerate((*LADOS, "outros", "branco", "nulo", "abstencao"))}
-    brasil = comparacao.filter((pl.col("nivel") == "brasil") & pl.col("j").is_in(LADOS))
-    return (
-        brasil.pivot(on="j", index="k", values=["beta_2022", "beta_2026"])
-        .sort(pl.col("k").replace_strict(ordem))
-        .select(
-            pl.col("k").replace_strict(ROTULOS_LINHA).alias("origem"),
-            pl.col("beta_2022_lula").alias("lula_2022"),
-            pl.col("beta_2026_lula").alias("lula_2026"),
-            pl.col("beta_2022_flavio").alias("flavio_2022"),
-            pl.col("beta_2026_flavio").alias("flavio_2026"),
-        )
+ORIGENS_VOTO = {
+    "outros": "Votou em outro candidato",
+    "abstencao": "Não foi votar",
+    "branco": "Votou em branco",
+    "nulo": "Anulou o voto",
+    "adversario": "Votou no adversário",
+}
+
+
+def origem_votos(fluxo_resumo: pl.DataFrame) -> pl.DataFrame:
+    """No Brasil, quantos votos cada lado ganhou de cada grupo do 1º turno (fora os próprios
+    eleitores) e quantos de cada 100 do grupo isso é. Em `adversario`, a coluna de um lado
+    traz o que ele tirou do outro."""
+    brasil = fluxo_resumo.filter(pl.col("dimensao") == "brasil").with_columns(
+        total=pl.sum_horizontal(*LADOS, "branco", "nulo", "abstencao")
     )
+    linhas = []
+    for k in ORIGENS_VOTO:
+        linha = {"origem": ORIGENS_VOTO[k]}
+        for lado, outro in zip(LADOS, reversed(LADOS), strict=True):
+            grupo = brasil.filter(pl.col("k") == (outro if k == "adversario" else k))
+            linha[lado] = grupo[lado].item()
+            linha[f"{lado}_100"] = grupo[lado].item() / grupo["total"].item()
+        linhas.append(linha)
+    return pl.DataFrame(linhas)
+
+
+def votos_perdidos(fluxo_resumo: pl.DataFrame) -> dict[str, float]:
+    """No Brasil, quantos eleitores de cada lado no 1º turno não votaram nele no 2º."""
+    brasil = fluxo_resumo.filter(pl.col("dimensao") == "brasil")
+    opcoes = [*LADOS, "branco", "nulo", "abstencao"]
+    return {
+        lado: brasil.filter(pl.col("k") == lado)
+        .select(pl.sum_horizontal(o for o in opcoes if o != lado))
+        .item()
+        for lado in LADOS
+    }
 
 
 def _municipios(votos_municipio: pl.DataFrame, uf: str | None) -> pl.DataFrame:
@@ -599,7 +619,6 @@ def mapa_virada(votos_municipio: pl.DataFrame, uf: str | None = None) -> pl.Data
         (pl.col("virada") / pl.col("aptos_2t") * 100).alias("virada_100"),
         "delta_lula",
         "delta_flavio",
-        "vencedor_2t",
     )
 
 

@@ -236,12 +236,18 @@ def test_virada_por_regiao_e_por_recorte_soma_a_virada_do_brasil():
     assert recortes.filter(pl.col("nome") == "Capitais")["municipios"].item() == 27
 
 
-def test_transferencia_comparada_traz_os_seis_grupos_nos_dois_anos():
+def test_ganhos_menos_perdas_fecham_o_crescimento_real_de_cada_lado():
     gold = dados.carregar()
-    transf = dados.transferencia_comparada(gold.comparacao_transferencia)
-    assert transf["origem"].to_list()[:2] == ["Lado Lula", "Lado Flávio"]
-    assert transf.height == 6
-    assert transf.select(pl.exclude("origem")).min_horizontal().min() >= 0
+    origem = dados.origem_votos(gold.fluxo_resumo)
+    perdidos = dados.votos_perdidos(gold.fluxo_resumo)
+    brasil = dados.linha_resumo(gold.resumo, "brasil", "brasil")
+    assert origem["origem"].to_list() == list(dados.ORIGENS_VOTO.values())
+    for lado in dados.LADOS:
+        # O resíduo da estimativa nacional é de menos de 25 mil votos.
+        assert origem[lado].sum() - perdidos[lado] == pytest.approx(
+            brasil[f"{lado}_2t"] - brasil[f"{lado}_1t"], abs=25_000
+        )
+        assert origem[f"{lado}_100"].is_between(0, 1).all()
 
 
 def test_mapas_do_2o_turno_cobrem_os_municipios_com_o_codigo_da_malha():
