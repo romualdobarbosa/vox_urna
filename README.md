@@ -1,5 +1,7 @@
 # Vox Urna
 
+[![CI](https://github.com/romualdobarbosa/vox_urna/actions/workflows/ci.yml/badge.svg)](https://github.com/romualdobarbosa/vox_urna/actions/workflows/ci.yml)
+
 O 2º turno presidencial de 2026 visto só pelos boletins de urna do TSE. Tem a projeção que fiz antes da eleição, o confronto dela com o resultado e de onde veio a virada do Lula, além do pipeline de dados que chega nisso tudo.
 
 > **Não é pesquisa eleitoral.** Ninguém foi entrevistado. A projeção usa metodologia própria e as análises usam os dados oficiais das urnas, que o TSE deixa abertos para qualquer cidadão.

@@ -20,8 +20,9 @@ silver: bronze bronze-resultados
 gold: silver
 	OPENBLAS_NUM_THREADS=1 uv run vox-urna gold
 
+# O grupo dashboard entra porque tests/dashboard importa o polars.
 test:
-	uv run pytest
+	uv run --group dashboard pytest
 
 lint:
 	uv run ruff check .
