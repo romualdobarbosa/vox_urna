@@ -1,16 +1,38 @@
 # Vox Urna
 
 [![CI](https://github.com/romualdobarbosa/vox_urna/actions/workflows/ci.yml/badge.svg)](https://github.com/romualdobarbosa/vox_urna/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](pyproject.toml)
 
 O 2º turno presidencial de 2026 visto só pelos boletins de urna do TSE. Tem a projeção que fiz antes da eleição, o confronto dela com o resultado e de onde veio a virada do Lula, além do pipeline de dados que chega nisso tudo.
 
 > **Não é pesquisa eleitoral.** Ninguém foi entrevistado. A projeção usa metodologia própria e as análises usam os dados oficiais das urnas, que o TSE deixa abertos para qualquer cidadão.
 
+> **TL;DR (English).** I built a medallion data pipeline (bronze, silver, gold) in Python, DuckDB and Parquet over the ballot-box records that Brazil's Superior Electoral Court (TSE) publishes for the 2018, 2022 and 2026 presidential elections. For the 2026 runoff alone that meant 499,207 binary ASN.1 files fetched in about a million requests, each one hashed on arrival, decoded, checked against data-quality invariants and reconciled vote for vote with the official results. A constrained ecological-inference regression per electoral zone (SciPy SLSQP), backtested on 2022, produced a methodological projection published before the vote (not an opinion poll), and after the vote the same model showed where the projection went wrong. Dashboard: https://voxurna.streamlit.app/
+
 **Dashboard:** https://voxurna.streamlit.app/
+
+![A aba "A virada" do dashboard, com o resultado do 2º turno de 2026 e os municípios que mudaram de lado](docs/img/dashboard.png)
 
 | A projeção, antes do 2º turno | O resultado oficial |
 |---|---|
 | ![Mapa da projeção do 2º turno de 2026 por município, no cenário base](docs/img/mapa_municipios.png) | ![Mapa do resultado oficial do 2º turno de 2026 por município](docs/img/mapa_resultado_2026.png) |
+
+## Em números
+
+| Métrica | Valor | De onde vem |
+|---|---|---|
+| Seções na configuração do TSE, 2º turno de 2026 (Brasil) | 517.179 | configs `{uf}-p{pleito}-cs.json` baixadas pelo `bronze-urna` ([vox-urna.md](vox-urna.md)) |
+| Seções com boletim de urna, 2º turno de 2026 | 499.207 | manifest do `bronze-urna` ([vox-urna.md](vox-urna.md)) |
+| Requisições ao site de resultados do TSE | ~1 milhão | execução do `make bronze-urna` ([vox-urna.md](vox-urna.md)) |
+| Arquivos brutos do 2º turno de 2026 | 4,0 GB | `data/bronze/urna/ano=2026/turno=2/` ([vox-urna.md](vox-urna.md)) |
+| Custo da ingestão | ~5h de parede, ~1.050 s de CPU, pico de 564 MB de RAM | execução do `make bronze-urna` ([vox-urna.md](vox-urna.md)) |
+| Seções em quarentena nos dados reais | 5 em 2018, 5 em 2022, 0 em 2026 (todas urnas anuladas) | tabela `rejeitadas` do silver ([vox-urna.md](vox-urna.md)) |
+| Municípios conferidos com o resultado divulgado, 2º turno de 2026 | 5.757 (5.571 no Brasil e 186 no exterior) | conferência do silver com o JSON de resultados ([vox-urna.md](vox-urna.md)) |
+| Taxa de match 2026 ↔ 2022 | 99,5% do eleitorado | `data/gold/taxa_match.parquet` |
+| Tempo do gold | ~1min30 (11 min com o BLAS multithread) | comentário do alvo `gold` no [Makefile](Makefile) |
+| Ajuste do modelo por zona (SLSQP) | ~10 ms | [vox-urna.md](vox-urna.md), seção do modelo |
+| Testes automatizados | 137 | `make test` |
 
 ## Por que fiz isso
 
