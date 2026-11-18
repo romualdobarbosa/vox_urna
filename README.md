@@ -141,6 +141,16 @@ O dashboard também mostra o backtest de 2022, a estabilidade de cada linha do �
 
 Uma CLI com um comando por camada (`vox-urna bronze`, `silver`, `gold`), encadeados por `make all`.
 
+```mermaid
+flowchart LR
+    ckan["CKAN do TSE<br/>boletins de urna em zip + sha512"] --> bronze
+    urna["Site de resultados<br/>arquivos de urna em ASN.1"] --> bronze
+    res["Site de resultados<br/>resultados divulgados em JSON"] --> bronze
+    bronze["Bronze<br/>arquivos brutos + manifest"] --> silver["Silver<br/>Parquet por seção + quarentena"]
+    silver --> gold["Gold<br/>β por zona, projeção, confronto"]
+    gold --> dash["Dashboard Streamlit"]
+```
+
 ### Bronze (ingestão)
 
 Três fontes do TSE, todas abertas:
@@ -165,7 +175,17 @@ A regressão por zona, a ligação com 2026, os cenários, o backtest, a estabil
 
 Recortes reais pequenos do Acre de cada ano para o parsing, BUs binários reais para o decodificador, testes das invariantes e um teste de recuperação do modelo, com seções sintéticas geradas de um β conhecido que o estimador precisa reencontrar.
 
-A stack é Python 3.12 (uv), DuckDB, Polars, Parquet, SciPy, asn1tools, Streamlit, Plotly, ruff e pre-commit.
+A stack é Python 3.12 (uv), DuckDB, NumPy, SciPy, Parquet e asn1tools no pipeline, Streamlit, Polars e Plotly no dashboard, e ruff, pre-commit e GitHub Actions no desenvolvimento.
+
+## Bugs que valeram a pena
+
+### O BLAS brigando com ele mesmo
+
+O gold ajusta um SLSQP por zona, milhares de problemas com matrizes pequenas. Com o OpenBLAS no padrão, cada conta abria várias threads, e elas ficavam disputando os núcleos em vez de trabalhar. O gold levava 11 minutos. Com `OPENBLAS_NUM_THREADS=1` no alvo `gold` do Makefile, caiu para 1min30. Nesse tamanho de matriz, thread a mais custa mais do que rende.
+
+### O limite que o TSE anuncia e o que ele aguenta
+
+O site de resultados anuncia um limite de 5.000 requisições por segundo. Com 32 conexões, ele começou a devolver erro 429 em massa e ficou assim uns 10 minutos. Com 16 não houve erro nenhum, e esse virou o padrão do `bronze-urna`. Como o manifest guarda o status de cada arquivo, o re-run depois do bloqueio só buscou o que faltava.
 
 ## Como reproduzir
 
@@ -206,6 +226,8 @@ src/vox_urna/
 app/          dashboard Streamlit e as figuras dos mapas
 tests/        testes por camada, com fixtures reais do AC
 docs/adr/     decisões de arquitetura
+docs/img/     imagens deste README
+docs/posts/   texto e imagem dos posts de divulgação
 GLOSSARY.md   vocabulário do projeto
 vox-urna.md   especificação completa
 ```
