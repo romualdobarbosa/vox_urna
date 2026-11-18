@@ -33,6 +33,7 @@ O 2º turno presidencial de 2026 visto só pelos boletins de urna do TSE. Tem a 
 | Tempo do gold | ~1min30 (11 min com o BLAS multithread) | comentário do alvo `gold` no [Makefile](Makefile) |
 | Ajuste do modelo por zona (SLSQP) | ~10 ms | [vox-urna.md](vox-urna.md), seção do modelo |
 | Testes automatizados | 137 | `make test` |
+| Cobertura de testes do pacote `vox_urna` | 91% | `make test` (pytest-cov), também no log do CI |
 
 ## Por que fiz isso
 

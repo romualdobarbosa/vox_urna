@@ -22,7 +22,7 @@ gold: silver
 
 # O grupo dashboard entra porque tests/dashboard importa o polars.
 test:
-	uv run --group dashboard pytest
+	uv run --group dashboard pytest --cov=vox_urna --cov-report=term
 
 lint:
 	uv run ruff check .
