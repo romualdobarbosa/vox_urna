@@ -188,9 +188,11 @@ s.a.  0 ≤ β_kj ≤ 1,   Σ_j β_kj = 1
 
 ## Stack
 
-Python 3.12 (uv), DuckDB, Polars, Parquet, cvxpy/scipy, Streamlit, ruff, pre-commit.
+Python 3.12 (uv), DuckDB, NumPy, SciPy (SLSQP), Parquet, asn1tools, ruff, pre-commit. O dashboard usa Streamlit, Polars e Plotly (grupo `dashboard` do `pyproject.toml`).
 
-## Cronograma
+## Cronograma (histórico)
+
+> O plano de outubro de 2026, mantido como registro. Todas as entregas saíram.
 
 | Data | Entrega |
 |---|---|
