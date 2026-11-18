@@ -15,7 +15,9 @@ from plotly.subplots import make_subplots
 import dados
 import mapa
 
-DIR_IMG = Path(__file__).resolve().parent.parent / "docs" / "img"
+DIR_DOCS = Path(__file__).resolve().parent.parent / "docs"
+DIR_IMG = DIR_DOCS / "img"
+DIR_POSTS = DIR_DOCS / "posts"
 
 
 def span(texto: str, cor: str, tamanho: int = 26) -> str:
@@ -206,7 +208,7 @@ def main() -> None:
             "#666",
             17,
         ),
-        DIR_IMG / "post_projecao_resultado.png",
+        DIR_POSTS / "post_projecao_resultado.png",
     )
 
 
