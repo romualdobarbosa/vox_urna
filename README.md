@@ -142,15 +142,7 @@ O dashboard também mostra o backtest de 2022, a estabilidade de cada linha do �
 
 Uma CLI com um comando por camada (`vox-urna bronze`, `silver`, `gold`), encadeados por `make all`.
 
-```mermaid
-flowchart LR
-    ckan["CKAN do TSE<br/>boletins de urna em zip + sha512"] --> bronze
-    urna["Site de resultados<br/>arquivos de urna em ASN.1"] --> bronze
-    res["Site de resultados<br/>resultados divulgados em JSON"] --> bronze
-    bronze["Bronze<br/>arquivos brutos + manifest"] --> silver["Silver<br/>Parquet por seção + quarentena"]
-    silver --> gold["Gold<br/>β por zona, projeção, confronto"]
-    gold --> dash["Dashboard Streamlit"]
-```
+![Diagrama do pipeline. Os boletins do CKAN, os arquivos de urna e os resultados divulgados pelo TSE entram na CLI vox-urna, passam pelas camadas bronze, silver e gold, com uma quarentena para as seções que não batem as invariantes, e terminam no dashboard Streamlit](docs/img/arquitetura.png)
 
 ### Bronze (ingestão)
 
